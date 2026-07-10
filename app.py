@@ -596,28 +596,17 @@ with st.sidebar:
     """, unsafe_allow_html=True)
     
     st.markdown("---")
-    # Invisible/Micro button for automated script rerun triggering
-    if st.button("🔄 Canlı Senkronizasyon", key="sidebar_autorefresh_btn", use_container_width=True, help="Sayfa verilerini veritabanından günceller."):
-        st.rerun()
-        
-    # Auto-refresh component injecting JS query selector that clicks the button every 5 seconds
-    import streamlit.components.v1 as components
-    components.html(
-        """
-        <script>
-            setInterval(function() {
-                const buttons = window.parent.document.querySelectorAll("button");
-                for (let btn of buttons) {
-                    if (btn.innerText && btn.innerText.includes("🔄 Canlı Senkronizasyon")) {
-                        btn.click();
-                        break;
-                    }
-                }
-            }, 5000);
-        </script>
-        """,
-        height=0
-    )
+    # Auto-refresh using streamlit-autorefresh (fully compatible with Streamlit Cloud & local multi-device)
+    try:
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=5000, key="global_autorefresh")
+        st.markdown(
+            "<div style='text-align:center; font-size:0.85em; color:#00adb5; font-weight:bold;'>🔄 Canlı Senkronizasyon Aktif (5s)</div>",
+            unsafe_allow_html=True
+        )
+    except Exception:
+        if st.button("🔄 Canlı Senkronizasyon", key="sidebar_autorefresh_btn", use_container_width=True):
+            st.rerun()
 
 # ----------------- MODULE: HIZLI POS KASA -----------------
 if menu == "🛒 Hızlı POS Kasa":
