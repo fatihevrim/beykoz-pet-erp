@@ -3,32 +3,61 @@ import os
 from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
+from urllib.parse import urlparse
 
 try:
-    import psycopg2
-    import psycopg2.extras
+    import pg8000
     HAS_POSTGRES = True
 except ImportError:
     HAS_POSTGRES = False
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "beykoz_pet.db")
 
+class DictRow(list):
+    def __init__(self, row_data, columns):
+        super().__init__(row_data)
+        self.columns = columns
+        self.column_to_index = {col: i for i, col in enumerate(columns)}
+        
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            if key not in self.column_to_index:
+                raise KeyError(key)
+            return super().__getitem__(self.column_to_index[key])
+        return super().__getitem__(key)
+        
+    def get(self, key, default=None):
+        if isinstance(key, str):
+            if key not in self.column_to_index:
+                return default
+            return super().__getitem__(self.column_to_index[key])
+        try:
+            return super().__getitem__(key)
+        except IndexError:
+            return default
+            
+    def keys(self):
+        return self.columns
+        
+    def values(self):
+        return list(self)
+        
+    def items(self):
+        return [(col, self[col]) for col in self.columns]
+
 class PostgresCursorWrapper:
     def __init__(self, pg_cursor):
         self.cursor = pg_cursor
         
     def execute(self, query, params=None):
-        # 1. Standardize query placeholders from ? to %s for PostgreSQL
         query = query.replace("?", "%s")
-        # 2. Standardize SQLite-specific AUTOINCREMENT to PostgreSQL SERIAL
         query = query.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
-        # 3. Standardize SQLite-specific unique replacements to standard INSERT
         if "INSERT OR REPLACE INTO" in query:
             query = query.replace("INSERT OR REPLACE INTO", "INSERT INTO")
         elif "INSERT OR IGNORE INTO" in query:
             query = query.replace("INSERT OR IGNORE INTO", "INSERT INTO")
             
-        self.cursor.execute(query, params)
+        self.cursor.execute(query, params or ())
         
     def executemany(self, query, seq_of_params):
         query = query.replace("?", "%s")
@@ -40,10 +69,16 @@ class PostgresCursorWrapper:
         self.cursor.executemany(query, seq_of_params)
         
     def fetchone(self):
-        return self.cursor.fetchone()
+        row = self.cursor.fetchone()
+        if row is None:
+            return None
+        columns = [desc[0] for desc in self.cursor.description]
+        return DictRow(row, columns)
         
     def fetchall(self):
-        return self.cursor.fetchall()
+        rows = self.cursor.fetchall()
+        columns = [desc[0] for desc in self.cursor.description]
+        return [DictRow(r, columns) for r in rows]
         
     @property
     def rowcount(self):
@@ -61,8 +96,7 @@ class PostgresConnectionWrapper:
         self.conn = pg_conn
         
     def cursor(self):
-        pg_cursor = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        return PostgresCursorWrapper(pg_cursor)
+        return PostgresCursorWrapper(self.conn.cursor())
         
     def commit(self):
         self.conn.commit()
@@ -88,10 +122,16 @@ def get_db_connection():
         
     if HAS_POSTGRES and supabase_url:
         try:
-            conn = psycopg2.connect(supabase_url)
+            db_url = urlparse(supabase_url)
+            conn = pg8000.dbapi.connect(
+                user=db_url.username,
+                password=db_url.password,
+                host=db_url.hostname,
+                port=db_url.port or 5432,
+                database=db_url.path.lstrip('/')
+            )
             return PostgresConnectionWrapper(conn)
         except Exception as e:
-            # Output warning but fallback to SQLite cleanly
             print(f"[Supabase Connection Error] Falling back to SQLite. Error: {e}")
             
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
