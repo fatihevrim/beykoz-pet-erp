@@ -644,6 +644,11 @@ if menu == "🛒 Hızlı POS Kasa":
         if "clear_barcode" not in st.session_state:
             st.session_state.clear_barcode = False
 
+        # Check if a barcode was scanned from camera (passed via query params)
+        if "barcode" in st.query_params:
+            st.session_state.barcode_scan_input = st.query_params["barcode"]
+            del st.query_params["barcode"]
+
         # Eğer sıfırlama bayrağı tetiklendiyse, widget çizilmeden ÖNCE state'i temizle
         if st.session_state.clear_barcode:
             st.session_state.barcode_scan_input = ""
@@ -652,6 +657,67 @@ if menu == "🛒 Hızlı POS Kasa":
         col_scan_pos, col_search_pos = st.columns([5, 5])
         
         with col_scan_pos:
+            with st.expander("📸 Kameradan Barkod Tara (Mobil)", expanded=False):
+                import streamlit.components.v1 as components
+                components.html(
+                    """
+                    <div style="background-color: #0b0e14; border: 1px solid rgba(0, 173, 181, 0.2); border-radius: 12px; padding: 15px; text-align: center;">
+                        <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+                        <div id="reader" style="width: 100%; max-width: 320px; margin: 0 auto; border-radius: 8px; overflow: hidden; background: #000;"></div>
+                        <div id="status" style="margin-top: 10px; font-size: 0.9em; color: #a7f3d0; font-family: sans-serif;">📷 Kamera hazır. Taramak için hizalayın.</div>
+                        <button id="start-btn" style="background: linear-gradient(135deg, #00adb5 0%, #00f2fe 100%); color: #000; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%;">📷 Kamerayı Başlat</button>
+                        <button id="stop-btn" style="background: #ef4444; color: #fff; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%; display: none;">🛑 Kamerayı Kapat</button>
+                    </div>
+                    
+                    <script>
+                        const startBtn = document.getElementById("start-btn");
+                        const stopBtn = document.getElementById("stop-btn");
+                        const statusDiv = document.getElementById("status");
+                        let html5QrCode = null;
+                    
+                        startBtn.addEventListener("click", () => {
+                            statusDiv.innerText = "🔄 Kamera başlatılıyor...";
+                            startBtn.style.display = "none";
+                            stopBtn.style.display = "block";
+                            
+                            html5QrCode = new Html5Qrcode("reader");
+                            const config = { fps: 15, qrbox: { width: 250, height: 150 } };
+                            
+                            const successCallback = (decodedText, decodedResult) => {
+                                statusDiv.innerText = "✅ Barkod Algılandı: " + decodedText;
+                                html5QrCode.stop().then(() => {
+                                    const parentUrl = new URL(document.referrer || window.top.location.href);
+                                    parentUrl.searchParams.set("barcode", decodedText);
+                                    window.top.location.href = parentUrl.toString();
+                                });
+                            };
+                            
+                            html5QrCode.start({ facingMode: "environment" }, config, successCallback)
+                                .catch((err) => {
+                                    console.warn(err);
+                                    html5QrCode.start({ facingMode: "user" }, config, successCallback)
+                                        .then(() => { statusDiv.innerText = "📷 Ön kamera aktif. Barkodu yaklaştırın."; })
+                                        .catch((err2) => {
+                                            statusDiv.innerText = "❌ Kamera hatası: " + err2;
+                                            startBtn.style.display = "block";
+                                            stopBtn.style.display = "none";
+                                        });
+                                });
+                        });
+                    
+                        stopBtn.addEventListener("click", () => {
+                            if (html5QrCode) {
+                                html5QrCode.stop().then(() => {
+                                    statusDiv.innerText = "🛑 Kamera kapatıldı.";
+                                    startBtn.style.display = "block";
+                                    stopBtn.style.display = "none";
+                                });
+                            }
+                        });
+                    </script>
+                    """,
+                    height=350
+                )
             # Scanner input simulation with key binding for programmatic clearing
             barcode_input = st.text_input(
                 "Barkod Okutun veya Yazın (Enter):", 
@@ -1352,8 +1418,77 @@ elif menu == "📦 Stok ve Ürünler":
         if df_products.empty:
             st.info("İşlem yapılacak ürün bulunamadı.")
         else:
+            if "update_barcode_search_val" not in st.session_state:
+                st.session_state.update_barcode_search_val = ""
+                
+            if "barcode" in st.query_params:
+                st.session_state.update_barcode_search_val = st.query_params["barcode"]
+                del st.query_params["barcode"]
+                
+            with st.expander("📸 Kameradan Barkod Tara", expanded=False):
+                import streamlit.components.v1 as components
+                components.html(
+                    """
+                    <div style="background-color: #0b0e14; border: 1px solid rgba(0, 173, 181, 0.2); border-radius: 12px; padding: 15px; text-align: center;">
+                        <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+                        <div id="reader" style="width: 100%; max-width: 320px; margin: 0 auto; border-radius: 8px; overflow: hidden; background: #000;"></div>
+                        <div id="status" style="margin-top: 10px; font-size: 0.9em; color: #a7f3d0; font-family: sans-serif;">📷 Kamera hazır. Taramak için hizalayın.</div>
+                        <button id="start-btn" style="background: linear-gradient(135deg, #00adb5 0%, #00f2fe 100%); color: #000; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%;">📷 Kamerayı Başlat</button>
+                        <button id="stop-btn" style="background: #ef4444; color: #fff; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%; display: none;">🛑 Kamerayı Kapat</button>
+                    </div>
+                    
+                    <script>
+                        const startBtn = document.getElementById("start-btn");
+                        const stopBtn = document.getElementById("stop-btn");
+                        const statusDiv = document.getElementById("status");
+                        let html5QrCode = null;
+                    
+                        startBtn.addEventListener("click", () => {
+                            statusDiv.innerText = "🔄 Kamera başlatılıyor...";
+                            startBtn.style.display = "none";
+                            stopBtn.style.display = "block";
+                            
+                            html5QrCode = new Html5Qrcode("reader");
+                            const config = { fps: 15, qrbox: { width: 250, height: 150 } };
+                            
+                            const successCallback = (decodedText, decodedResult) => {
+                                statusDiv.innerText = "✅ Barkod Algılandı: " + decodedText;
+                                html5QrCode.stop().then(() => {
+                                    const parentUrl = new URL(document.referrer || window.top.location.href);
+                                    parentUrl.searchParams.set("barcode", decodedText);
+                                    window.top.location.href = parentUrl.toString();
+                                });
+                            };
+                            
+                            html5QrCode.start({ facingMode: "environment" }, config, successCallback)
+                                .catch((err) => {
+                                    console.warn(err);
+                                    html5QrCode.start({ facingMode: "user" }, config, successCallback)
+                                        .then(() => { statusDiv.innerText = "📷 Ön kamera aktif. Barkodu yaklaştırın."; })
+                                        .catch((err2) => {
+                                            statusDiv.innerText = "❌ Kamera hatası: " + err2;
+                                            startBtn.style.display = "block";
+                                            stopBtn.style.display = "none";
+                                        });
+                                });
+                        });
+                    
+                        stopBtn.addEventListener("click", () => {
+                            if (html5QrCode) {
+                                html5QrCode.stop().then(() => {
+                                    statusDiv.innerText = "🛑 Kamera kapatıldı.";
+                                    startBtn.style.display = "block";
+                                    stopBtn.style.display = "none";
+                                });
+                            }
+                        });
+                    </script>
+                    """,
+                    height=350
+                )
+            
             # Smart text filter before selectbox
-            update_barcode_search = st.text_input("⚡ Barkod Okutun veya Ürün Adı Yazın:", placeholder="Seçmek için barkod okutun veya yazın...")
+            update_barcode_search = st.text_input("⚡ Barkod Okutun veya Ürün Adı Yazın:", value=st.session_state.update_barcode_search_val, placeholder="Seçmek için barkod okutun veya yazın...")
             
             # Filter options list
             filtered_prod_options = {}
