@@ -386,40 +386,50 @@ def init_db():
     conn.commit()
     
     # Veritabanı Şeması Güncelleme / Migrations
-    try:
-        cursor.execute("ALTER TABLE urunler ADD COLUMN gelis_fiyati REAL DEFAULT 0.0")
-    except Exception:
-        pass
-        
-    try:
-        cursor.execute("ALTER TABLE urunler ADD COLUMN hizli_kasa_kisayol INTEGER DEFAULT 0")
-    except Exception:
-        pass
+    def add_column_if_not_exists(table_name, column_name, column_def):
+        exists = False
+        try:
+            cursor.execute(f"SELECT {column_name} FROM {table_name} LIMIT 1")
+            exists = True
+        except Exception:
+            # Clear Postgres transaction aborted state
+            try:
+                if hasattr(conn, 'conn'):
+                    conn.conn.rollback()
+                elif hasattr(conn, 'rollback'):
+                    conn.rollback()
+            except Exception:
+                pass
+                
+        if not exists:
+            try:
+                cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}")
+                conn.commit()
+            except Exception as e:
+                print(f"[MIGRATION WARNING] Failed to add {column_name} to {table_name}: {e}")
+                try:
+                    if hasattr(conn, 'conn'):
+                        conn.conn.rollback()
+                    elif hasattr(conn, 'rollback'):
+                        conn.rollback()
+                except Exception:
+                    pass
 
+    add_column_if_not_exists("urunler", "gelis_fiyati", "REAL DEFAULT 0.0")
+    add_column_if_not_exists("urunler", "hizli_kasa_kisayol", "INTEGER DEFAULT 0")
+    
     try:
         cursor.execute("UPDATE urunler SET hizli_kasa_kisayol = 1 WHERE barkod LIKE 'custom_%'")
+        conn.commit()
     except Exception:
         pass
         
-    try:
-        cursor.execute("ALTER TABLE randevular ADD COLUMN durum TEXT DEFAULT 'Bekliyor'")
-    except Exception:
-        pass
-    try:
-        cursor.execute("ALTER TABLE randevular ADD COLUMN tamamlandi_tarih TEXT")
-    except Exception:
-        pass
-
-    try:
-        cursor.execute("ALTER TABLE satislar ADD COLUMN odeme_yontemi TEXT")
-    except Exception:
-        pass
-        
-    try:
-        cursor.execute("ALTER TABLE satislar ADD COLUMN musteri_id INTEGER")
-    except Exception:
-        pass
-        
+    add_column_if_not_exists("randevular", "durum", "TEXT DEFAULT 'Bekliyor'")
+    add_column_if_not_exists("randevular", "tamamlandi_tarih", "TEXT")
+    
+    add_column_if_not_exists("satislar", "odeme_yontemi", "TEXT")
+    add_column_if_not_exists("satislar", "musteri_id", "INTEGER")
+    
     # Müşteri Tablosu Şeması Güncelleme / Migrations
     yeni_kolonlar = [
         ("hayvan_turu", "TEXT"),
@@ -437,11 +447,7 @@ def init_db():
         ("iskonto_orani", "REAL DEFAULT 0.0")
     ]
     for kolon_adi, kolon_tipi in yeni_kolonlar:
-        try:
-            cursor.execute(f"ALTER TABLE musteriler ADD COLUMN {kolon_adi} {kolon_tipi}")
-        except Exception as e:
-            if "duplicate column name" not in str(e).lower() and "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
-                print(f"[MIGRATION WARNING] Kolon eklenirken hata: {kolon_adi} -> {e}")
+        add_column_if_not_exists("musteriler", kolon_adi, kolon_tipi)
         
     conn.commit()
     
