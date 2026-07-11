@@ -1679,19 +1679,60 @@ elif menu == "👥 Müşteri Yönetimi":
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Confirm delete for customer and Inline discount editor
+                    # Confirm delete for customer and Inline profile editor
                     col_del1, col_del2 = st.columns([7, 5])
                     with col_del1:
-                        with st.expander("✏️ İskontoyu Düzenle", expanded=False):
-                            new_isk = st.number_input("Yeni İskonto Oranı (%):", min_value=0.0, max_value=100.0, step=1.0, value=float(isk_val), key=f"edit_isk_{row['id']}")
-                            if st.button("💾 Kaydet", key=f"save_isk_btn_{row['id']}", use_container_width=True):
-                                conn_ui = get_db_connection()
-                                c_ui = conn_ui.cursor()
-                                c_ui.execute("UPDATE musteriler SET iskonto_orani = ? WHERE id = ?", (new_isk, row['id']))
-                                conn_ui.commit()
-                                conn_ui.close()
-                                st.toast(f"{row['isim']} iskonto oranı %{new_isk} olarak güncellendi!", icon="✅")
-                                st.rerun()
+                        with st.expander("✏️ Profili Düzenle", expanded=False):
+                            edit_isim = st.text_input("İsim Soyadı:", value=row.get('isim', ''), key=f"edit_c_isim_{row['id']}")
+                            edit_tel = st.text_input("Telefon:", value=row.get('telefon', ''), key=f"edit_c_tel_{row['id']}")
+                            
+                            turu_list = ["Kedi", "Köpek", "Balık", "Kuş", "Kemirgen", "Sürüngen"]
+                            try:
+                                turu_idx = turu_list.index(h_turu)
+                            except ValueError:
+                                turu_idx = 0
+                            edit_turu = st.selectbox("Hayvan Türü:", turu_list, index=turu_idx, key=f"edit_c_turu_{row['id']}")
+                            
+                            edit_irk = st.text_input("Irk / Tür Detay:", value=irk, key=f"edit_c_irk_{row['id']}")
+                            edit_yas = st.text_input("Yaşı:", value=yas_val, key=f"edit_c_yas_{row['id']}")
+                            
+                            kisir_list = ["Belirtilmedi", "Evet", "Hayır"]
+                            try:
+                                kisir_idx = kisir_list.index(kisir_val)
+                            except ValueError:
+                                kisir_idx = 0
+                            edit_kisir = st.selectbox("Kısırlaştırılmış:", kisir_list, index=kisir_idx, key=f"edit_c_kisir_{row['id']}")
+                            
+                            edit_kilo = st.number_input("Kilo / Hacim:", value=float(kilo_val) if kilo_val else 0.0, step=0.5, key=f"edit_c_kilo_{row['id']}")
+                            edit_boyut = st.text_input("Boyut / Kafes / Akvaryum Türü:", value=boyut_val, key=f"edit_c_boyut_{row['id']}")
+                            edit_ekipman = st.text_area("Ekipman / Kum / Taban:", value=ekipman, key=f"edit_c_ekipman_{row['id']}")
+                            edit_saglik = st.text_area("Sağlık / Alerji Detayları:", value=saglik, key=f"edit_c_saglik_{row['id']}")
+                            edit_notlar = st.text_area("Özel Notlar / Beslenme:", value=notlar, key=f"edit_c_notlar_{row['id']}")
+                            
+                            try:
+                                default_b_date = datetime.strptime(row.get('dogum_gunu', ''), "%Y-%m-%d").date() if row.get('dogum_gunu') else None
+                            except Exception:
+                                default_b_date = None
+                            edit_b_date = st.date_input("Evcil Hayvan Doğum Günü:", value=default_b_date, key=f"edit_c_birth_{row['id']}")
+                            edit_b_date_str = edit_b_date.strftime("%Y-%m-%d") if edit_b_date else None
+                            
+                            edit_isk = st.number_input("İskonto Oranı (%):", min_value=0.0, max_value=100.0, step=1.0, value=float(isk_val), key=f"edit_c_isk_{row['id']}")
+                            
+                            if st.button("💾 Değişiklikleri Kaydet", key=f"save_cust_btn_{row['id']}", use_container_width=True):
+                                if not edit_isim:
+                                    st.error("İsim boş bırakılamaz!")
+                                else:
+                                    conn_ui = get_db_connection()
+                                    c_ui = conn_ui.cursor()
+                                    c_ui.execute("""
+                                        UPDATE musteriler 
+                                        SET isim = ?, telefon = ?, hayvan_turu = ?, irk_detay = ?, yas = ?, kisir = ?, kilo = ?, boyut = ?, ekipman_detay = ?, saglik_detay = ?, ozel_notlar = ?, dogum_gunu = ?, iskonto_orani = ?
+                                        WHERE id = ?
+                                    """, (edit_isim, edit_tel, edit_turu, edit_irk, edit_yas, edit_kisir, edit_kilo, edit_boyut, edit_ekipman, edit_saglik, edit_notlar, edit_b_date_str, edit_isk, row['id']))
+                                    conn_ui.commit()
+                                    conn_ui.close()
+                                    st.toast(f"{edit_isim} profili başarıyla güncellendi!", icon="✅")
+                                    st.rerun()
                                 
                     with col_del2:
                         confirm_del_cust = st.checkbox("Profil silmeyi onayla", key=f"del_cust_chk_{row['id']}")
@@ -1956,14 +1997,63 @@ elif menu == "💉 Aşı Takvimi":
             df_vac = pd.DataFrame(vac_data)
             st.dataframe(df_vac.drop(columns=["id"]), use_container_width=True)
             
-            # Delete vaccination record
-            st.markdown("#### 🗑️ Aşı Kaydı Silme")
-            del_vac_id = st.selectbox("Silinecek Aşı Kaydı:", options=df_vac["id"].tolist(), format_func=lambda x: f"{df_vac[df_vac['id'] == x]['Evcil Hayvan'].values[0]} - {df_vac[df_vac['id'] == x]['Aşı Adı'].values[0]} ({df_vac[df_vac['id'] == x]['Müşteri'].values[0]})")
-            if st.button("❌ Aşı Kaydını Sil", use_container_width=True):
-                c.execute("DELETE FROM asilar WHERE id = ?", (del_vac_id,))
-                conn.commit()
-                st.toast("Aşı kaydı silindi.", icon="🗑️")
-                st.rerun()
+            # Edit & Delete vaccination records
+            col_vac_edit, col_vac_del = st.columns([7, 5])
+            
+            with col_vac_edit:
+                with st.expander("✏️ Aşı Kaydı Düzenle", expanded=False):
+                    edit_vac_id = st.selectbox("Düzenlenecek Aşı Kaydı:", options=df_vac["id"].tolist(), format_func=lambda x: f"{df_vac[df_vac['id'] == x]['Evcil Hayvan'].values[0]} - {df_vac[df_vac['id'] == x]['Aşı Adı'].values[0]} ({df_vac[df_vac['id'] == x]['Müşteri'].values[0]})", key="edit_vac_select")
+                    
+                    selected_vac = None
+                    for vac in all_vaccinations:
+                        if vac["id"] == edit_vac_id:
+                            selected_vac = vac
+                            break
+                    
+                    if selected_vac:
+                        edit_pet_name = st.text_input("Evcil Hayvan Adı:", value=selected_vac["hayvan_ad"], key=f"edit_v_pet_{selected_vac['id']}")
+                        
+                        asi_list = ["Karma Aşı", "Kuduz Aşısı", "İç Parazit", "Dış Parazit", "Lösemi Aşısı", "Bronchine Aşısı", "Mantar Aşısı", "Diğer"]
+                        try:
+                            asi_idx = asi_list.index(selected_vac["asi_adi"])
+                        except ValueError:
+                            asi_idx = 7
+                        edit_vac_name = st.selectbox("Aşı Adı:", asi_list, index=asi_idx, key=f"edit_v_name_{selected_vac['id']}")
+                        
+                        try:
+                            default_apply = datetime.strptime(selected_vac["uygulama_tarih"], "%Y-%m-%d").date()
+                        except Exception:
+                            default_apply = datetime.now().date()
+                            
+                        try:
+                            default_next = datetime.strptime(selected_vac["gelecek_doz_tarih"], "%Y-%m-%d").date()
+                        except Exception:
+                            default_next = datetime.now().date()
+                            
+                        edit_apply_date = st.date_input("Uygulama Tarihi:", value=default_apply, key=f"edit_v_apply_{selected_vac['id']}")
+                        edit_next_date = st.date_input("Gelecek Doz Tarihi:", value=default_next, key=f"edit_v_next_{selected_vac['id']}")
+                        
+                        if st.button("💾 Aşıyı Güncelle", key=f"save_vac_btn_{selected_vac['id']}", use_container_width=True):
+                            if not edit_pet_name:
+                                st.error("Evcil hayvan adı boş bırakılamaz!")
+                            else:
+                                c.execute("""
+                                    UPDATE asilar 
+                                    SET hayvan_ad = ?, asi_adi = ?, uygulama_tarih = ?, gelecek_doz_tarih = ?
+                                    WHERE id = ?
+                                """, (edit_pet_name, edit_vac_name, edit_apply_date.strftime("%Y-%m-%d"), edit_next_date.strftime("%Y-%m-%d"), edit_vac_id))
+                                conn.commit()
+                                st.toast("Aşı kaydı güncellendi.", icon="✅")
+                                st.rerun()
+                                
+            with col_vac_del:
+                with st.expander("🗑️ Aşı Kaydı Sil", expanded=False):
+                    del_vac_id = st.selectbox("Silinecek Aşı Kaydı:", options=df_vac["id"].tolist(), format_func=lambda x: f"{df_vac[df_vac['id'] == x]['Evcil Hayvan'].values[0]} - {df_vac[df_vac['id'] == x]['Aşı Adı'].values[0]} ({df_vac[df_vac['id'] == x]['Müşteri'].values[0]})", key="del_vac_select")
+                    if st.button("❌ Aşı Kaydını Sil", key="del_vac_btn", use_container_width=True):
+                        c.execute("DELETE FROM asilar WHERE id = ?", (del_vac_id,))
+                        conn.commit()
+                        st.toast("Aşı kaydı silindi.", icon="🗑️")
+                        st.rerun()
                 
     conn.close()
 
