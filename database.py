@@ -1,19 +1,151 @@
 import sqlite3
 import os
 from datetime import datetime, timedelta
+import streamlit as st
+import pandas as pd
+
+try:
+    import psycopg2
+    import psycopg2.extras
+    HAS_POSTGRES = True
+except ImportError:
+    HAS_POSTGRES = False
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "beykoz_pet.db")
 
+class PostgresCursorWrapper:
+    def __init__(self, pg_cursor):
+        self.cursor = pg_cursor
+        
+    def execute(self, query, params=None):
+        # 1. Standardize query placeholders from ? to %s for PostgreSQL
+        query = query.replace("?", "%s")
+        # 2. Standardize SQLite-specific AUTOINCREMENT to PostgreSQL SERIAL
+        query = query.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        # 3. Standardize SQLite-specific unique replacements to standard INSERT
+        if "INSERT OR REPLACE INTO" in query:
+            query = query.replace("INSERT OR REPLACE INTO", "INSERT INTO")
+        elif "INSERT OR IGNORE INTO" in query:
+            query = query.replace("INSERT OR IGNORE INTO", "INSERT INTO")
+            
+        self.cursor.execute(query, params)
+        
+    def executemany(self, query, seq_of_params):
+        query = query.replace("?", "%s")
+        query = query.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        if "INSERT OR REPLACE INTO" in query:
+            query = query.replace("INSERT OR REPLACE INTO", "INSERT INTO")
+        elif "INSERT OR IGNORE INTO" in query:
+            query = query.replace("INSERT OR IGNORE INTO", "INSERT INTO")
+        self.cursor.executemany(query, seq_of_params)
+        
+    def fetchone(self):
+        return self.cursor.fetchone()
+        
+    def fetchall(self):
+        return self.cursor.fetchall()
+        
+    @property
+    def rowcount(self):
+        return self.cursor.rowcount
+        
+    @property
+    def description(self):
+        return self.cursor.description
+        
+    def close(self):
+        self.cursor.close()
+
+class PostgresConnectionWrapper:
+    def __init__(self, pg_conn):
+        self.conn = pg_conn
+        
+    def cursor(self):
+        pg_cursor = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        return PostgresCursorWrapper(pg_cursor)
+        
+    def commit(self):
+        self.conn.commit()
+        
+    def rollback(self):
+        self.conn.rollback()
+        
+    def close(self):
+        self.conn.close()
+        
+    def execute(self, query, params=None):
+        cursor = self.cursor()
+        cursor.execute(query, params)
+        return cursor
+
 def get_db_connection():
+    supabase_url = None
+    try:
+        if "SUPABASE_DB_URL" in st.secrets:
+            supabase_url = st.secrets["SUPABASE_DB_URL"]
+    except Exception:
+        pass
+        
+    if HAS_POSTGRES and supabase_url:
+        try:
+            conn = psycopg2.connect(supabase_url)
+            return PostgresConnectionWrapper(conn)
+        except Exception as e:
+            # Output warning but fallback to SQLite cleanly
+            print(f"[Supabase Connection Error] Falling back to SQLite. Error: {e}")
+            
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.row_factory = sqlite3.Row
     return conn
 
+def read_sql_query(query, conn, params=None):
+    is_sqlite = isinstance(conn, sqlite3.Connection)
+    if not is_sqlite:
+        query = query.replace("?", "%s")
+        
+    cursor = conn.cursor()
+    if params:
+        cursor.execute(query, params)
+    else:
+        cursor.execute(query)
+        
+    rows = cursor.fetchall()
+    if not cursor.description:
+        cursor.close()
+        return pd.DataFrame()
+        
+    columns = [desc[0] for desc in cursor.description]
+    
+    data_list = []
+    for r in rows:
+        data_list.append({columns[i]: r[i] for i in range(len(columns))})
+        
+    cursor.close()
+    return pd.DataFrame(data_list, columns=columns)
+
 def init_db():
-    is_new_db = not os.path.exists(DB_PATH)
+    supabase_url = None
+    try:
+        if "SUPABASE_DB_URL" in st.secrets:
+            supabase_url = st.secrets["SUPABASE_DB_URL"]
+    except Exception:
+        pass
+
+    is_postgres = (HAS_POSTGRES and supabase_url is not None)
     conn = get_db_connection()
     cursor = conn.cursor()
+    
+    # Identify if new/empty database dynamically
+    is_new_db = False
+    if is_postgres:
+        try:
+            cursor.execute("SELECT COUNT(*) FROM users")
+            is_new_db = (cursor.fetchone()[0] == 0)
+        except Exception:
+            is_new_db = True
+    else:
+        is_new_db = not os.path.exists(DB_PATH)
     
     # 1. Shop Active Inventory Table
     cursor.execute("""
@@ -244,21 +376,24 @@ def init_db():
     """)
     
     # Seed default users
-    cursor.execute("DELETE FROM users WHERE username IN ('patron', 'eleman')")
-    cursor.execute("INSERT OR REPLACE INTO users (username, password, role) VALUES ('beykozpet', 'beykozpet56', 'Patron')")
-    cursor.execute("INSERT OR REPLACE INTO users (username, password, role) VALUES ('kasa', '5656', 'Satış Elemanı')")
+    try:
+        cursor.execute("DELETE FROM users WHERE username IN ('patron', 'eleman', 'beykozpet', 'kasa')")
+        cursor.execute("INSERT INTO users (username, password, role) VALUES ('beykozpet', 'beykozpet56', 'Patron')")
+        cursor.execute("INSERT INTO users (username, password, role) VALUES ('kasa', '5656', 'Satış Elemanı')")
+    except Exception:
+        pass
     
     conn.commit()
     
     # Veritabanı Şeması Güncelleme / Migrations
     try:
         cursor.execute("ALTER TABLE urunler ADD COLUMN gelis_fiyati REAL DEFAULT 0.0")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
         
     try:
         cursor.execute("ALTER TABLE urunler ADD COLUMN hizli_kasa_kisayol INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
 
     try:
@@ -268,21 +403,21 @@ def init_db():
         
     try:
         cursor.execute("ALTER TABLE randevular ADD COLUMN durum TEXT DEFAULT 'Bekliyor'")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
     try:
         cursor.execute("ALTER TABLE randevular ADD COLUMN tamamlandi_tarih TEXT")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
 
     try:
         cursor.execute("ALTER TABLE satislar ADD COLUMN odeme_yontemi TEXT")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
         
     try:
         cursor.execute("ALTER TABLE satislar ADD COLUMN musteri_id INTEGER")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
         
     # Müşteri Tablosu Şeması Güncelleme / Migrations
@@ -304,8 +439,8 @@ def init_db():
     for kolon_adi, kolon_tipi in yeni_kolonlar:
         try:
             cursor.execute(f"ALTER TABLE musteriler ADD COLUMN {kolon_adi} {kolon_tipi}")
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" not in str(e).lower() and "already exists" not in str(e).lower():
+        except Exception as e:
+            if "duplicate column name" not in str(e).lower() and "already exists" not in str(e).lower() and "duplicate" not in str(e).lower():
                 print(f"[MIGRATION WARNING] Kolon eklenirken hata: {kolon_adi} -> {e}")
         
     conn.commit()

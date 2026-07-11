@@ -39,7 +39,7 @@ def get_local_ip():
     except Exception:
         return "192.168.1.9"
 
-from database import init_db, get_db_connection
+from database import init_db, get_db_connection, read_sql_query
 from scraper import scrape_barcode_online
 from ai_engine import clean_scraped_data_with_ai, get_smart_recommendations
 from qnb_billing import import_invoice_to_stock, MOCK_XML_INVOICE
@@ -1003,7 +1003,7 @@ if menu == "🛒 Hızlı POS Kasa":
             st.markdown("---")
             st.markdown("#### 👥 Müşteri İlişkilendir")
             conn = get_db_connection()
-            df_m_pos = pd.read_sql_query("SELECT * FROM musteriler", conn)
+            df_m_pos = read_sql_query("SELECT * FROM musteriler", conn)
             conn.close()
             
             # Ensure expected columns are present in POS customer selection
@@ -1336,7 +1336,7 @@ elif menu == "📦 Stok ve Ürünler":
     
     # Load all products once for both panels
     conn = get_db_connection()
-    df_products = pd.read_sql_query("SELECT * FROM urunler", conn)
+    df_products = read_sql_query("SELECT * FROM urunler", conn)
     df_products["skt"] = df_products["skt"].fillna("")
     conn.close()
     
@@ -1731,7 +1731,7 @@ elif menu == "👥 Müşteri Yönetimi":
         st.markdown("### 👥 Kayıtlı Müşteri Profilleri")
         
         conn = get_db_connection()
-        df_m = pd.read_sql_query("SELECT * FROM musteriler ORDER BY id DESC", conn)
+        df_m = read_sql_query("SELECT * FROM musteriler ORDER BY id DESC", conn)
         conn.close()
         
         # Ensure expected columns are present in profile listing to prevent KeyError
@@ -2869,7 +2869,7 @@ elif menu == "📊 Ön Muhasebe":
         # 2. Income/Expense chart distributions
         st.markdown("---")
         st.markdown("### 📈 Aylık Finansal Trend (Gelir vs Gider)")
-        df_acc = pd.read_sql_query("SELECT tarih, tip, tutar FROM accounting WHERE tarih >= ? ORDER BY tarih ASC", conn, params=(month_ago_str,))
+        df_acc = read_sql_query("SELECT tarih, tip, tutar FROM accounting WHERE tarih >= ? ORDER BY tarih ASC", conn, params=(month_ago_str,))
         
         if df_acc.empty:
             st.info("Trend grafiği için henüz muhasebe hareketi kaydedilmemiş.")
@@ -2887,7 +2887,7 @@ elif menu == "📊 Ön Muhasebe":
         st.markdown("---")
         st.markdown("### 📖 Muhasebe Hareket Detay Listesi")
         
-        df_ledger = pd.read_sql_query("SELECT * FROM accounting ORDER BY id DESC", conn)
+        df_ledger = read_sql_query("SELECT * FROM accounting ORDER BY id DESC", conn)
         if df_ledger.empty:
             st.info("Kayıtlı muhasebe hareketi bulunmamaktadır.")
         else:
@@ -3457,7 +3457,7 @@ elif menu == "📊 Satış & MVP Analiz":
     # 2. Daily / Weekly / Monthly Sales chart
     st.markdown("---")
     st.markdown("### 📅 Zaman Serisi Satış Dağılımı")
-    df_s = pd.read_sql_query("SELECT tarih, toplam_tutar FROM satislar ORDER BY tarih DESC", conn)
+    df_s = read_sql_query("SELECT tarih, toplam_tutar FROM satislar ORDER BY tarih DESC", conn)
     
     if df_s.empty:
         st.info("Henüz satış gerçekleşmediği için zaman grafiği çizilemedi.")
@@ -3471,8 +3471,8 @@ elif menu == "📊 Satış & MVP Analiz":
     # 3. MVP Products
     st.markdown("---")
     st.markdown("### 🏆 En Çok Satan MVP Ürünler (Top 5)")
-    df_mvp = pd.read_sql_query("""
-        SELECT urun_ad as 'Ürün Adı', SUM(miktar) as 'Toplam Satış Adeti', SUM(toplam_tutar) as 'Toplam Kazanç (TL)'
+    df_mvp = read_sql_query("""
+        SELECT urun_ad as "Ürün Adı", SUM(miktar) as "Toplam Satış Adeti", SUM(toplam_tutar) as "Toplam Kazanç (TL)"
         FROM satislar
         GROUP BY barkod
         ORDER BY SUM(miktar) DESC
@@ -3534,11 +3534,16 @@ elif menu == "🧾 QNB E-Fatura":
             if save_btn:
                 conn = get_db_connection()
                 c = conn.cursor()
-                c.execute("INSERT OR REPLACE INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_user", c_user))
-                c.execute("INSERT OR REPLACE INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_pass", secure_encode(c_pass)))
-                c.execute("INSERT OR REPLACE INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_vkn", c_vkn))
-                c.execute("INSERT OR REPLACE INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_app", c_app))
-                c.execute("INSERT OR REPLACE INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_prod", "True" if c_prod else "False"))
+                c.execute("DELETE FROM ayarlar WHERE anahtar = ?", ("qnb_user",))
+                c.execute("INSERT INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_user", c_user))
+                c.execute("DELETE FROM ayarlar WHERE anahtar = ?", ("qnb_pass",))
+                c.execute("INSERT INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_pass", secure_encode(c_pass)))
+                c.execute("DELETE FROM ayarlar WHERE anahtar = ?", ("qnb_vkn",))
+                c.execute("INSERT INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_vkn", c_vkn))
+                c.execute("DELETE FROM ayarlar WHERE anahtar = ?", ("qnb_app",))
+                c.execute("INSERT INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_app", c_app))
+                c.execute("DELETE FROM ayarlar WHERE anahtar = ?", ("qnb_prod",))
+                c.execute("INSERT INTO ayarlar (anahtar, deger) VALUES (?, ?)", ("qnb_prod", "True" if c_prod else "False"))
                 conn.commit()
                 conn.close()
                 st.success("API Bağlantı ayarları veritabanına şifreli olarak kaydedildi.")
