@@ -1357,9 +1357,15 @@ elif menu == "📦 Stok ve Ürünler":
     
     c.execute("SELECT SUM(stok) FROM urunler")
     total_stock = c.fetchone()[0] or 0
+    
+    c.execute("SELECT SUM(stok * fiyat) FROM urunler")
+    total_sales_val = c.fetchone()[0] or 0.0
     conn.close()
     
-    col_st1, col_st2, col_st3 = st.columns(3)
+    # Format to Turkish currency layout (e.g. 1.250.350,00 TL)
+    total_val_str = f"{total_sales_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    
+    col_st1, col_st2, col_st3, col_st4 = st.columns(4)
     with col_st1:
         st.markdown(f"""
         <div class="metric-card">
@@ -1382,6 +1388,14 @@ elif menu == "📦 Stok ve Ürünler":
             <h3>📊 Toplam Stok</h3>
             <h2>{total_stock} Adet</h2>
             <span style='color:#34d399;'>Toplam fiziksel ürün</span>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_st4:
+        st.markdown(f"""
+        <div class="metric-card" style='border-left: 4px solid #10b981;'>
+            <h3 style='color:#10b981;'>💰 Envanter Değeri (Satış)</h3>
+            <h2 style='color:#34d399;'>{total_val_str} TL</h2>
+            <span style='color:#34d399;'>Toplam mal varlığı</span>
         </div>
         """, unsafe_allow_html=True)
         
