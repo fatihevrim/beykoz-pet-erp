@@ -432,6 +432,48 @@ if st.session_state.current_theme == "light":
 else:
     st.markdown(DARK_THEME_CSS, unsafe_allow_html=True)
 
+RESPONSIVE_MOBILE_CSS = """
+<style>
+@media (max-width: 768px) {
+    /* Force all columns to stack vertically on mobile */
+    div[data-testid="column"] {
+        width: 100% !important;
+        flex: 1 1 100% !important;
+        min-width: 100% !important;
+        margin-bottom: 12px !important;
+    }
+    
+    /* Make touch targets large and easy to tap */
+    button, [data-baseweb="button"], .stButton button {
+        min-height: 52px !important;
+        font-size: 1.15em !important;
+        border-radius: 8px !important;
+    }
+    
+    input, select, textarea, [data-baseweb="select"] {
+        min-height: 48px !important;
+        font-size: 1.15em !important;
+    }
+    
+    /* Make metric cards display compactly and clearly */
+    div[data-testid="stMetricValue"] {
+        font-size: 1.8em !important;
+    }
+    
+    /* Make headings and titles more compact on small screens */
+    h1 { font-size: 1.8em !important; }
+    h2 { font-size: 1.5em !important; }
+    h3 { font-size: 1.25em !important; }
+    
+    /* Optimize dataframe tables spacing for touch navigation */
+    .stDataFrame {
+        font-size: 0.9em !important;
+    }
+}
+</style>
+"""
+st.markdown(RESPONSIVE_MOBILE_CSS, unsafe_allow_html=True)
+
 # Ensure Database is Initialized
 init_db()
 
@@ -1435,209 +1477,268 @@ elif menu == "📦 Stok ve Ürünler":
 
         @fragment_decorator
         def render_stock_editor(products_df):
-            st.markdown("### ⚡ Hızlı Güncelle / Sil")
-            if products_df.empty:
-                st.info("İşlem yapılacak ürün bulunamadı.")
-            else:
-                if "update_barcode_search_val" not in st.session_state:
-                    st.session_state.update_barcode_search_val = ""
+            st.markdown("### ⚡ Barkod Okut & Stok Güncelle")
+            
+            # Initialize session states for form auto-population and scraping caching
+            if "stock_master_barcode" not in st.session_state:
+                st.session_state.stock_master_barcode = ""
+            if "new_prod_barcode_val" not in st.session_state:
+                st.session_state.new_prod_barcode_val = ""
+            if "new_prod_name_val" not in st.session_state:
+                st.session_state.new_prod_name_val = ""
+            if "new_prod_cat_val" not in st.session_state:
+                st.session_state.new_prod_cat_val = "Kedi Maması"
+            if "last_scraped_barcode" not in st.session_state:
+                st.session_state.last_scraped_barcode = ""
+
+            # Check if camera barcode scan redirected to page query params
+            if "barcode" in st.query_params:
+                st.session_state.stock_master_barcode = st.query_params["barcode"]
+                del st.query_params["barcode"]
+
+            # 📸 Kameradan Barkod Okut (Mobile touch-optimized layout)
+            with st.expander("📸 Kameradan Barkod Tara", expanded=False):
+                import streamlit.components.v1 as components
+                components.html(
+                    """
+                    <div style="background-color: #0b0e14; border: 1px solid rgba(0, 173, 181, 0.2); border-radius: 12px; padding: 15px; text-align: center;">
+                        <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+                        <div id="reader" style="width: 100%; max-width: 320px; margin: 0 auto; border-radius: 8px; overflow: hidden; background: #000;"></div>
+                        <div id="status" style="margin-top: 10px; font-size: 0.9em; color: #a7f3d0; font-family: sans-serif;">📷 Kamera hazır. Taramak için hizalayın.</div>
+                        <button id="start-btn" style="background: linear-gradient(135deg, #00adb5 0%, #00f2fe 100%); color: #000; border: none; padding: 12px 20px; font-weight: bold; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; font-size: 1.1em;">📷 Kamerayı Başlat</button>
+                        <button id="stop-btn" style="background: #ef4444; color: #fff; border: none; padding: 12px 20px; font-weight: bold; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; display: none; font-size: 1.1em;">🛑 Kamerayı Kapat</button>
+                    </div>
                     
-                if "barcode" in st.query_params:
-                    st.session_state.update_barcode_search_val = st.query_params["barcode"]
-                    del st.query_params["barcode"]
+                    <script>
+                        const startBtn = document.getElementById("start-btn");
+                        const stopBtn = document.getElementById("stop-btn");
+                        const statusDiv = document.getElementById("status");
+                        let html5QrCode = null;
                     
-                with st.expander("📸 Kameradan Barkod Tara", expanded=False):
-                    import streamlit.components.v1 as components
-                    components.html(
-                        """
-                        <div style="background-color: #0b0e14; border: 1px solid rgba(0, 173, 181, 0.2); border-radius: 12px; padding: 15px; text-align: center;">
-                            <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
-                            <div id="reader" style="width: 100%; max-width: 320px; margin: 0 auto; border-radius: 8px; overflow: hidden; background: #000;"></div>
-                            <div id="status" style="margin-top: 10px; font-size: 0.9em; color: #a7f3d0; font-family: sans-serif;">📷 Kamera hazır. Taramak için hizalayın.</div>
-                            <button id="start-btn" style="background: linear-gradient(135deg, #00adb5 0%, #00f2fe 100%); color: #000; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%;">📷 Kamerayı Başlat</button>
-                            <button id="stop-btn" style="background: #ef4444; color: #fff; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%; display: none;">🛑 Kamerayı Kapat</button>
-                        </div>
-                        
-                        <script>
-                            const startBtn = document.getElementById("start-btn");
-                            const stopBtn = document.getElementById("stop-btn");
-                            const statusDiv = document.getElementById("status");
-                            let html5QrCode = null;
-                        
-                            startBtn.addEventListener("click", () => {
-                                statusDiv.innerText = "🔄 Kamera başlatılıyor...";
-                                startBtn.style.display = "none";
-                                stopBtn.style.display = "block";
-                                
-                                html5QrCode = new Html5Qrcode("reader");
-                                const config = { fps: 15, qrbox: { width: 250, height: 150 } };
-                                
-                                const successCallback = (decodedText, decodedResult) => {
-                                    statusDiv.innerText = "✅ Barkod Algılandı: " + decodedText;
-                                    html5QrCode.stop().then(() => {
-                                        try {
-                                            let targetUrl = document.referrer;
-                                            if (!targetUrl || targetUrl.includes("android-app://") || targetUrl.includes("ios-app://")) {
-                                                targetUrl = window.top.location.href;
-                                            }
-                                            const parentUrl = new URL(targetUrl);
-                                            parentUrl.searchParams.set("barcode", decodedText);
-                                            window.parent.location.href = parentUrl.toString();
-                                        } catch (e) {
-                                            console.error("CORS redirect blocked, trying fallback parent assign:", e);
-                                            try {
-                                                window.parent.location.search = "?barcode=" + encodeURIComponent(decodedText);
-                                            } catch (e2) {
-                                                window.location.search = "?barcode=" + encodeURIComponent(decodedText);
-                                            }
+                        startBtn.addEventListener("click", () => {
+                            statusDiv.innerText = "🔄 Kamera başlatılıyor...";
+                            startBtn.style.display = "none";
+                            stopBtn.style.display = "block";
+                            
+                            html5QrCode = new Html5Qrcode("reader");
+                            const config = { fps: 15, qrbox: { width: 250, height: 150 } };
+                            
+                            const successCallback = (decodedText, decodedResult) => {
+                                statusDiv.innerText = "✅ Barkod Algılandı: " + decodedText;
+                                html5QrCode.stop().then(() => {
+                                    try {
+                                        let targetUrl = document.referrer;
+                                        if (!targetUrl || targetUrl.includes("android-app://") || targetUrl.includes("ios-app://")) {
+                                            targetUrl = window.top.location.href;
                                         }
-                                    });
-                                };
-                                
-                                html5QrCode.start({ facingMode: "environment" }, config, successCallback)
-                                    .catch((err) => {
-                                        console.warn(err);
-                                        html5QrCode.start({ facingMode: "user" }, config, successCallback)
-                                            .then(() => { statusDiv.innerText = "📷 Ön kamera aktif. Barkodu yaklaştırın."; })
-                                            .catch((err2) => {
-                                                statusDiv.innerText = "❌ Kamera hatası: " + err2;
-                                                startBtn.style.display = "block";
-                                                stopBtn.style.display = "none";
-                                            });
-                                    });
-                            });
-                        
-                            stopBtn.addEventListener("click", () => {
-                                if (html5QrCode) {
-                                    html5QrCode.stop().then(() => {
-                                        statusDiv.innerText = "🛑 Kamera kapatıldı.";
-                                        startBtn.style.display = "block";
-                                        stopBtn.style.display = "none";
-                                    });
-                                }
-                            });
-                        </script>
-                        """,
-                        height=350
-                    )
-                
-                # Smart text filter before selectbox
-                update_barcode_search = st.text_input("⚡ Barkod Okutun veya Ürün Adı Yazın:", value=st.session_state.update_barcode_search_val, placeholder="Seçmek için barkod okutun veya yazın...", key="stock_barcode_search_input")
-                
-                # Filter options list
-                filtered_prod_options = {}
-                for _, row in products_df.iterrows():
-                    label = f"{row['ad']} [{row['barkod']}]"
-                    if not update_barcode_search or update_barcode_search.lower() in label.lower():
-                        filtered_prod_options[row["barkod"]] = label
-                        
-                if not filtered_prod_options:
-                    st.warning("Eşleşen ürün bulunamadı.")
-                    selected_barcode = None
-                else:
-                    selected_barcode = st.selectbox(
-                        "Düzenlenecek Ürün Seçin:", 
-                        list(filtered_prod_options.keys()), 
-                        format_func=lambda x: filtered_prod_options[x],
-                        key="stock_product_select_box"
-                    )
-                
-                if selected_barcode:
-                    # Fetch detailed row info
-                    selected_prod = products_df[products_df["barkod"] == selected_barcode].iloc[0]
+                                        const parentUrl = new URL(targetUrl);
+                                        parentUrl.searchParams.set("barcode", decodedText);
+                                        window.parent.location.href = parentUrl.toString();
+                                    } catch (e) {
+                                        console.error("CORS redirect blocked, trying fallback parent assign:", e);
+                                        try {
+                                            window.parent.location.search = "?barcode=" + encodeURIComponent(decodedText);
+                                        } catch (e2) {
+                                            window.location.search = "?barcode=" + encodeURIComponent(decodedText);
+                                        }
+                                    }
+                                });
+                            };
+                            
+                            html5QrCode.start({ facingMode: "environment" }, config, successCallback)
+                                .catch((err) => {
+                                    console.warn(err);
+                                    html5QrCode.start({ facingMode: "user" }, config, successCallback)
+                                        .then(() => { statusDiv.innerText = "📷 Ön kamera aktif. Barkodu yaklaştırın."; })
+                                        .catch((err2) => {
+                                            statusDiv.innerText = "❌ Kamera hatası: " + err2;
+                                            startBtn.style.display = "block";
+                                            stopBtn.style.display = "none";
+                                        });
+                                });
+                        });
                     
-                    # Edit values form
-                    new_price = st.number_input("Satış Fiyatı (TL):", value=float(selected_prod["fiyat"]), min_value=0.0, step=5.0, key="stock_edit_price")
-                    new_stock = st.number_input("Stok Miktarı:", value=int(selected_prod["stok"]), min_value=0, step=1, key="stock_edit_qty")
+                        stopBtn.addEventListener("click", () => {
+                            if (html5QrCode) {
+                                html5QrCode.stop().then(() => {
+                                    statusDiv.innerText = "🛑 Kamera kapatıldı.";
+                                    startBtn.style.display = "block";
+                                    stopBtn.style.display = "none";
+                                });
+                            }
+                        });
+                    </script>
+                    """,
+                    height=350
+                )
+            
+            # Master Barcode Text Field (Target of Camera scans)
+            master_barcode = st.text_input("⚡ Barkod Okutun veya Elle Giriş Yapın:", value=st.session_state.stock_master_barcode, placeholder="Kontrol etmek veya eklemek için okutun...", key="stock_master_barcode_input")
+            
+            # Check duplicate product in active inventory
+            existing_product = None
+            if master_barcode.strip():
+                matching = products_df[products_df["barkod"] == master_barcode.strip()]
+                if not matching.empty:
+                    existing_product = matching.iloc[0]
                     
-                    # Parse current SKT if valid
-                    current_skt_str = selected_prod["skt"]
+            if master_barcode.strip() and existing_product is not None:
+                # ----------------- CASE A: MÜKERRER BARKOD - HIZLI STOK EKLEME -----------------
+                st.success(f"🔍 **Kayıtlı Ürün Bulundu:** {existing_product['ad']}")
+                
+                st.markdown("<div style='background-color:rgba(16,185,129,0.1); border-left:4px solid #10b981; padding:15px; border-radius:8px; margin-bottom:15px;'><strong>Bu ürün zaten kayıtlı!</strong> Stok artırmak veya fiyat güncellemek için aşağıdaki paneli kullanın.</div>", unsafe_allow_html=True)
+                
+                # Side-by-side metric display
+                col_metrics = st.columns(2)
+                with col_metrics[0]:
+                    st.metric("Mevcut Stok", f"{existing_product['stok']} Adet")
+                with col_metrics[1]:
+                    st.metric("Mevcut Satış Fiyatı", f"{existing_product['fiyat']:.2f} TL")
+                    
+                # Touch-friendly quick adjust forms
+                with st.form("quick_stock_adjust_form"):
+                    col_fields = st.columns(3)
+                    with col_fields[0]:
+                        add_qty = st.number_input("Eklenecek Adet (+):", min_value=0, value=0, step=1, key="quick_st_add_qty")
+                    with col_fields[1]:
+                        new_price = st.number_input("Yeni Satış Fiyatı (TL):", min_value=0.0, value=float(existing_product["fiyat"]), step=5.0, key="quick_st_new_price")
+                    with col_fields[2]:
+                        new_cost = st.number_input("Geliş Fiyatı (TL):", min_value=0.0, value=float(existing_product.get("gelis_fiyati", 0.0)), step=5.0, key="quick_st_new_cost")
+                        
+                    # Expiry Date field
+                    current_skt_str = existing_product["skt"]
                     try:
                         current_skt_val = datetime.strptime(current_skt_str, "%Y-%m-%d").date() if current_skt_str else datetime.today().date()
                     except Exception:
                         current_skt_val = datetime.today().date()
                         
-                    new_skt = st.date_input("Son Tüketim Tarihi (SKT):", value=current_skt_val, key="stock_edit_skt")
+                    new_skt = st.date_input("Son Tüketim Tarihi (SKT):", value=current_skt_val, key="quick_st_new_skt")
                     new_skt_str = new_skt.strftime("%Y-%m-%d")
                     
-                    # Dynamic POS shortcut option
-                    is_shortcut = bool(selected_prod.get("hizli_kasa_kisayol", 0))
-                    new_is_shortcut = st.checkbox("Bu Ürün Hızlı Kasada Kısayol Butonu Olarak Görünsün", value=is_shortcut, key=f"shortcut_chk_{selected_barcode}")
+                    shortcut_chk = st.checkbox("Bu Ürün Hızlı Kasada Kısayol Butonu Olarak Görünsün", value=bool(existing_product.get("hizli_kasa_kisayol", 0)), key="quick_st_shortcut_chk")
                     
                     col_actions = st.columns(2)
                     with col_actions[0]:
-                        if st.button("⚡ Bilgileri Güncelle", type="primary", use_container_width=True, key="stock_update_submit_btn"):
+                        save_quick = st.form_submit_button("💾 Stok ve Fiyat Güncelle", use_container_width=True)
+                        if save_quick:
+                            final_stock = int(existing_product["stok"]) + add_qty
                             conn = get_db_connection()
                             c = conn.cursor()
-                            c.execute("UPDATE urunler SET fiyat = ?, stok = ?, skt = ?, hizli_kasa_kisayol = ? WHERE barkod = ?", 
-                                      (new_price, new_stock, new_skt_str, 1 if new_is_shortcut else 0, selected_barcode))
+                            c.execute("UPDATE urunler SET fiyat = ?, gelis_fiyati = ?, stok = ?, skt = ?, hizli_kasa_kisayol = ? WHERE barkod = ?", 
+                                      (new_price, new_cost, final_stock, new_skt_str, 1 if shortcut_chk else 0, master_barcode.strip()))
                             conn.commit()
                             conn.close()
-                            st.toast("Ürün fiyatı, stoğu, SKT ve kısayol bilgisi başarıyla güncellendi!", icon="✅")
+                            st.toast(f"✅ Ürün güncellendi! Yeni Stok: {final_stock}", icon="⚡")
+                            st.session_state.stock_master_barcode = ""  # Clear master input
                             st.rerun()
                             
                     with col_actions[1]:
-                        # Safe delete block
-                        st.markdown("<p style='font-size:0.85em; color:#ef4444; font-weight:bold; margin-bottom:2px;'>⚠️ Silme Onayı</p>", unsafe_allow_html=True)
-                        confirm_delete = st.checkbox("Tamamen silmeyi onayla", key=f"del_confirm_{selected_barcode}")
-                        
-                        if st.button("🗑️ Ürünü Sil", type="secondary", use_container_width=True, key="stock_delete_submit_btn"):
-                            if not confirm_delete:
-                                st.warning("Lütfen silmeyi onaylayın.")
+                        # Delete confirmed block
+                        st.markdown("<p style='font-size:0.8em; color:#ef4444; font-weight:bold; margin-bottom:0;'>🗑️ Ürünü Sil</p>", unsafe_allow_html=True)
+                        confirm_del = st.checkbox("Silmeyi Onayla", key="quick_st_confirm_del")
+                        delete_btn = st.form_submit_button("🗑️ Ürünü Tamamen Sil", use_container_width=True)
+                        if delete_btn:
+                            if not confirm_del:
+                                st.error("Lütfen silme onay kutusunu işaretleyin!")
                             else:
                                 conn = get_db_connection()
                                 c = conn.cursor()
-                                c.execute("DELETE FROM urunler WHERE barkod = ?", (selected_barcode,))
-                                c.execute("DELETE FROM hazir_urunler WHERE barkod = ?", (selected_barcode,))
+                                c.execute("DELETE FROM urunler WHERE barkod = ?", (master_barcode.strip(),))
+                                c.execute("DELETE FROM hazir_urunler WHERE barkod = ?", (master_barcode.strip(),))
                                 conn.commit()
                                 conn.close()
-                                st.toast("Ürün veritabanından tamamen silindi!", icon="🗑️")
+                                st.toast("🗑️ Ürün envanterden tamamen silindi!", icon="🗑️")
+                                st.session_state.stock_master_barcode = ""
                                 st.rerun()
+                                
+            else:
+                # ----------------- CASE B: SIFIRDAN YENİ ÜRÜN EKLEME (AUTO-SCRAPING) -----------------
+                if master_barcode.strip():
+                    st.info("ℹ️ Bu barkod kayıtlı değil. Aşağıdaki formdan yeni ürün olarak ekleyebilirsiniz.")
+                    # Trigger automatic web scraping on the first lookup of this barcode
+                    if st.session_state.last_scraped_barcode != master_barcode.strip():
+                        from scraper import scrape_barcode_online
+                        with st.spinner("🌐 İnternetten ürün adı çekiliyor..."):
+                            scraped = scrape_barcode_online(master_barcode.strip())
+                        if scraped:
+                            st.session_state.new_prod_barcode_val = master_barcode.strip()
+                            st.session_state.new_prod_name_val = scraped["ad"]
+                            st.session_state.new_prod_cat_val = scraped["kategori"]
+                            st.toast(f"🌐 Ürün Adı İnternetten Çekildi: {scraped['ad']}", icon="✅")
+                        else:
+                            st.session_state.new_prod_barcode_val = master_barcode.strip()
+                            st.session_state.new_prod_name_val = ""
+                            st.toast("⚠️ Ürün internetten bulunamadı, elle girebilirsiniz.", icon="ℹ️")
+                        st.session_state.last_scraped_barcode = master_barcode.strip()
+                        st.rerun()
+
+                is_expanded = (master_barcode.strip() != "")
+                
+                with st.expander("➕ Sıfırdan Yeni Ürün Ekle", expanded=is_expanded):
+                    col_b1, col_b2 = st.columns([7, 3])
+                    with col_b1:
+                        f_barkod = st.text_input("Barkod Numarası (Zorunlu):", value=st.session_state.new_prod_barcode_val, key="new_prod_barcode_input")
+                    with col_b2:
+                        st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+                        if st.button("🔍 İnternetten Bul", use_container_width=True, key="manual_scrape_btn"):
+                            if f_barkod.strip():
+                                from scraper import scrape_barcode_online
+                                with st.spinner("🔍 İnternet sorgusu yapılıyor..."):
+                                    scraped = scrape_barcode_online(f_barkod.strip())
+                                if scraped:
+                                    st.session_state.new_prod_barcode_val = f_barkod.strip()
+                                    st.session_state.new_prod_name_val = scraped["ad"]
+                                    st.session_state.new_prod_cat_val = scraped["kategori"]
+                                    st.toast(f"🌐 Ürün Adı İnternetten Çekildi: {scraped['ad']}", icon="✅")
+                                    st.rerun()
+                                else:
+                                    st.toast("❌ Ürün internetten bulunamadı, elle yazın.", icon="⚠️")
+                                    
+                    f_ad = st.text_input("Ürün Adı:", value=st.session_state.new_prod_name_val, key="new_prod_name_input")
+                    
+                    categories_list = ["Kedi Maması", "Köpek Maması", "Kum", "Aksesuar", "Ödül/Vitamin", "Oyuncak", "Diğer"]
+                    default_cat_index = 0
+                    if st.session_state.new_prod_cat_val in categories_list:
+                        default_cat_index = categories_list.index(st.session_state.new_prod_cat_val)
+                        
+                    f_kategori = st.selectbox("Kategori:", categories_list, index=default_cat_index, key="new_prod_category_input")
+                    
+                    col_inputs = st.columns(3)
+                    with col_inputs[0]:
+                        f_fiyat = st.number_input("Satış Fiyatı (TL):", min_value=0.0, step=5.0, key="new_prod_price_input")
+                    with col_inputs[1]:
+                        f_stok = st.number_input("Stok Adedi:", min_value=0, step=1, key="new_prod_stock_input")
+                    with col_inputs[2]:
+                        f_kritik = st.number_input("Kritik Stok Eşiği:", min_value=1, value=5, key="new_prod_critical_input")
+                        
+                    f_skt = st.date_input("Son Kullanma Tarihi (SKT):", value=None, key="new_prod_skt_input")
+                    skt_val = f_skt.strftime("%Y-%m-%d") if f_skt else None
+                    
+                    f_is_shortcut = st.checkbox("Bu Ürün Hızlı Kasada Kısayol Butonu Olarak Görünsün", value=False, key="new_prod_shortcut_input")
+                    
+                    if st.button("💾 Ürünü Envantere Ekle", type="primary", use_container_width=True, key="new_prod_submit_btn"):
+                        if not f_barkod or not f_ad:
+                            st.error("Barkod ve Ürün Adı alanları zorunludur!")
+                        else:
+                            conn = get_db_connection()
+                            c = conn.cursor()
+                            c.execute("SELECT 1 FROM urunler WHERE barkod = ?", (f_barkod.strip(),))
+                            if c.fetchone():
+                                st.error("Bu barkod zaten kayıtlı!")
+                            else:
+                                c.execute("""
+                                INSERT INTO urunler (barkod, ad, kategori, fiyat, stok, kritik_stok, skt, gorsel_url, hizli_kasa_kisayol)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """, (f_barkod.strip(), f_ad, f_kategori, f_fiyat, f_stok, f_kritik, skt_val, "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500", 1 if f_is_shortcut else 0))
+                                conn.commit()
+                                st.toast("✅ Yeni ürün başarıyla envantere eklendi!", icon="📦")
+                                st.session_state.stock_master_barcode = ""
+                                st.session_state.new_prod_barcode_val = ""
+                                st.session_state.new_prod_name_val = ""
+                                st.rerun()
+                            conn.close()
 
         render_stock_editor(df_products)
-                            
-        # Collapsible form to add brand new item
-        st.markdown("---")
-        with st.expander("➕ Sıfırdan Yeni Ürün Ekle", expanded=False):
-            with st.form("yeni_urun_ekle_form", clear_on_submit=True):
-                f_barkod = st.text_input("Barkod Numarası (Zorunlu):", key="new_prod_barcode")
-                f_ad = st.text_input("Ürün Adı:", key="new_prod_name")
-                f_kategori = st.selectbox("Kategori:", ["Kedi Maması", "Köpek Maması", "Kum", "Aksesuar", "Ödül/Vitamin", "Oyuncak", "Diğer"], key="new_prod_category")
-                
-                col_inputs = st.columns(3)
-                with col_inputs[0]:
-                    f_fiyat = st.number_input("Satış Fiyatı (TL):", min_value=0.0, step=5.0, key="new_prod_price")
-                with col_inputs[1]:
-                    f_stok = st.number_input("Stok Adedi:", min_value=0, step=1, key="new_prod_stock")
-                with col_inputs[2]:
-                    f_kritik = st.number_input("Kritik Stok Eşiği:", min_value=1, value=5, key="new_prod_critical")
-                
-                # Direct SKT input (optional/clearable by setting value=None)
-                f_skt = st.date_input("Son Kullanma Tarihi (SKT):", value=None, key="new_prod_skt")
-                skt_val = f_skt.strftime("%Y-%m-%d") if f_skt else None
-                
-                f_is_shortcut = st.checkbox("Bu Ürün Hızlı Kasada Kısayol Butonu Olarak Görünsün", value=False, key="new_prod_shortcut")
-                
-                submitted = st.form_submit_button("💾 Ürünü Envantere Ekle")
-                if submitted:
-                    if not f_barkod or not f_ad:
-                        st.error("Barkod ve Ürün Adı zorunludur!")
-                    else:
-                        conn = get_db_connection()
-                        c = conn.cursor()
-                        c.execute("SELECT 1 FROM urunler WHERE barkod = ?", (f_barkod,))
-                        if c.fetchone():
-                            st.error("Bu barkod zaten kayıtlı! Lütfen yukarıdaki hızlı düzenleme alanını kullanın.")
-                        else:
-                            c.execute("""
-                            INSERT INTO urunler (barkod, ad, kategori, fiyat, stok, kritik_stok, skt, gorsel_url, hizli_kasa_kisayol)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (f_barkod, f_ad, f_kategori, f_fiyat, f_stok, f_kritik, skt_val, "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500", 1 if f_is_shortcut else 0))
-                            conn.commit()
-                            st.success("Yeni ürün stoka eklendi!")
-                            conn.close()
-                            st.rerun()
-                        conn.close()
 
 # ----------------- MODULE: MUSTERI YONETIMI -----------------
 elif menu == "👥 Müşteri Yönetimi":
