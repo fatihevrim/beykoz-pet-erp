@@ -4,12 +4,7 @@ from datetime import datetime, timedelta
 import os
 import sqlite3
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "beykoz_pet.db")
-
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+from database import get_db_connection
 
 # Updated mock XML e-Invoice containing Reflex Yetişkin 15kg and other items
 MOCK_XML_INVOICE = """<?xml version="1.0" encoding="UTF-8"?>

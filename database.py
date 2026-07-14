@@ -91,6 +91,31 @@ class PostgresCursorWrapper:
     def close(self):
         self.cursor.close()
 
+class SQLiteConnectionWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+        
+    def cursor(self):
+        return self.conn.cursor()
+        
+    def commit(self):
+        self.conn.commit()
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+            
+    def rollback(self):
+        self.conn.rollback()
+        
+    def close(self):
+        self.conn.close()
+        
+    def execute(self, query, params=None):
+        if params is not None:
+            return self.conn.execute(query, params)
+        return self.conn.execute(query)
+
 class PostgresConnectionWrapper:
     def __init__(self, pg_conn):
         self.conn = pg_conn
@@ -100,7 +125,11 @@ class PostgresConnectionWrapper:
         
     def commit(self):
         self.conn.commit()
-        
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+            
     def rollback(self):
         self.conn.rollback()
         
@@ -112,6 +141,24 @@ class PostgresConnectionWrapper:
         cursor.execute(query, params)
         return cursor
 
+@st.cache_resource(show_spinner=False)
+def _get_cached_db_connection(supabase_url=None):
+    if HAS_POSTGRES and supabase_url:
+        db_url = urlparse(supabase_url)
+        conn = pg8000.dbapi.connect(
+            user=db_url.username,
+            password=db_url.password,
+            host=db_url.hostname,
+            port=db_url.port or 5432,
+            database=db_url.path.lstrip('/')
+        )
+        return PostgresConnectionWrapper(conn)
+    else:
+        conn = sqlite3.connect(DB_PATH, timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.row_factory = sqlite3.Row
+        return SQLiteConnectionWrapper(conn)
+
 def get_db_connection():
     supabase_url = None
     try:
@@ -120,31 +167,38 @@ def get_db_connection():
     except Exception:
         pass
         
-    if HAS_POSTGRES and supabase_url:
+    try:
+        conn = _get_cached_db_connection(supabase_url)
+        # Test connection validity
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        cursor.close()
+        return conn
+    except Exception as e:
+        print(f"[Supabase Connection Stale] Clearing cache and reconnecting... Error: {e}")
         try:
-            db_url = urlparse(supabase_url)
-            conn = pg8000.dbapi.connect(
-                user=db_url.username,
-                password=db_url.password,
-                host=db_url.hostname,
-                port=db_url.port or 5432,
-                database=db_url.path.lstrip('/')
-            )
-            return PostgresConnectionWrapper(conn)
-        except Exception as e:
-            print(f"[Supabase Connection Error] Falling back to SQLite. Error: {e}")
+            _get_cached_db_connection.clear()
+        except Exception:
+            pass
             
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.row_factory = sqlite3.Row
-    return conn
+        try:
+            return _get_cached_db_connection(supabase_url)
+        except Exception as e2:
+            print(f"[Database Fallback Triggered] Error: {e2}")
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.row_factory = sqlite3.Row
+            return SQLiteConnectionWrapper(conn)
 
-def read_sql_query(query, conn, params=None):
-    is_sqlite = isinstance(conn, sqlite3.Connection)
+@st.cache_data(ttl=30, show_spinner=False)
+def read_sql_query(query, _conn, params=None):
+    is_sqlite = isinstance(_conn, sqlite3.Connection) or isinstance(_conn, SQLiteConnectionWrapper)
+    
+    cursor = _conn.cursor()
     if not is_sqlite:
         query = query.replace("?", "%s")
         
-    cursor = conn.cursor()
     if params:
         cursor.execute(query, params)
     else:
