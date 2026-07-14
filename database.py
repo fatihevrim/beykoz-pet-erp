@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
 from urllib.parse import urlparse
+import queue
+import threading
 
 try:
     import pg8000
@@ -12,6 +14,11 @@ except ImportError:
     HAS_POSTGRES = False
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "beykoz_pet.db")
+
+# Thread-safe queue and thread states for async cloud sync
+_sync_queue = queue.Queue()
+_worker_started = False
+_worker_lock = threading.Lock()
 
 class DictRow(list):
     def __init__(self, row_data, columns):
@@ -91,37 +98,73 @@ class PostgresCursorWrapper:
     def close(self):
         self.cursor.close()
 
-class SQLiteConnectionWrapper:
-    def __init__(self, conn):
-        self.conn = conn
-        
-    def cursor(self):
-        return self.conn.cursor()
-        
-    def commit(self):
-        self.conn.commit()
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-            
-    def rollback(self):
-        self.conn.rollback()
-        
-    def close(self):
-        self.conn.close()
-        
-    def execute(self, query, params=None):
-        if params is not None:
-            return self.conn.execute(query, params)
-        return self.conn.execute(query)
-
 class PostgresConnectionWrapper:
     def __init__(self, pg_conn):
         self.conn = pg_conn
         
     def cursor(self):
         return PostgresCursorWrapper(self.conn.cursor())
+        
+    def commit(self):
+        self.conn.commit()
+        
+    def rollback(self):
+        self.conn.rollback()
+        
+    def close(self):
+        self.conn.close()
+
+# Helper to identify if query writes to database
+def is_write_query(query):
+    q = query.strip().upper()
+    return q.startswith("INSERT") or q.startswith("UPDATE") or q.startswith("DELETE") or q.startswith("REPLACE")
+
+class HybridCursorWrapper:
+    def __init__(self, local_cursor, supabase_url=None):
+        self.cursor = local_cursor
+        self.supabase_url = supabase_url
+        
+    def execute(self, query, params=None):
+        # 1. Execute on local SQLite instantly
+        self.cursor.execute(query, params or ())
+        
+        # 2. Queue write query asynchronously for Supabase
+        if self.supabase_url and is_write_query(query):
+            _sync_queue.put((query, params))
+            
+    def executemany(self, query, seq_of_params):
+        # 1. Execute on local SQLite instantly
+        self.cursor.executemany(query, seq_of_params)
+        
+        # 2. Queue write queries asynchronously for Supabase
+        if self.supabase_url and is_write_query(query):
+            for params in seq_of_params:
+                _sync_queue.put((query, params))
+                
+    def fetchone(self):
+        return self.cursor.fetchone()
+        
+    def fetchall(self):
+        return self.cursor.fetchall()
+        
+    @property
+    def rowcount(self):
+        return self.cursor.rowcount
+        
+    @property
+    def description(self):
+        return self.cursor.description
+        
+    def close(self):
+        self.cursor.close()
+
+class HybridConnectionWrapper:
+    def __init__(self, local_conn, supabase_url=None):
+        self.conn = local_conn
+        self.supabase_url = supabase_url
+        
+    def cursor(self):
+        return HybridCursorWrapper(self.conn.cursor(), self.supabase_url)
         
     def commit(self):
         self.conn.commit()
@@ -141,24 +184,46 @@ class PostgresConnectionWrapper:
         cursor.execute(query, params)
         return cursor
 
-@st.cache_resource(show_spinner=False)
-def _get_cached_db_connection(supabase_url=None):
-    if HAS_POSTGRES and supabase_url:
-        db_url = urlparse(supabase_url)
-        conn = pg8000.dbapi.connect(
-            user=db_url.username,
-            password=db_url.password,
-            host=db_url.hostname,
-            port=db_url.port or 5432,
-            database=db_url.path.lstrip('/')
-        )
-        return PostgresConnectionWrapper(conn)
-    else:
-        conn = sqlite3.connect(DB_PATH, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.row_factory = sqlite3.Row
-        return SQLiteConnectionWrapper(conn)
+# Background worker thread function to sync database writes to Supabase
+def _supabase_sync_worker(supabase_url):
+    while True:
+        try:
+            task = _sync_queue.get()
+            if task is None:
+                _sync_queue.task_done()
+                break
+                
+            query, params = task
+            try:
+                db_url = urlparse(supabase_url)
+                raw_pg = pg8000.dbapi.connect(
+                    user=db_url.username,
+                    password=db_url.password,
+                    host=db_url.hostname,
+                    port=db_url.port or 5432,
+                    database=db_url.path.lstrip('/')
+                )
+                conn = PostgresConnectionWrapper(raw_pg)
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                conn.commit()
+                cursor.close()
+                conn.close()
+            except Exception as e:
+                print(f"[Supabase Async Sync Error] Query: {query} | Error: {e}")
+            _sync_queue.task_done()
+        except Exception as ex:
+            print(f"[Supabase Async Worker Exception] {ex}")
 
+def start_sync_worker(supabase_url):
+    global _worker_started
+    with _worker_lock:
+        if not _worker_started:
+            t = threading.Thread(target=_supabase_sync_worker, args=(supabase_url,), daemon=True, name="SupabaseSyncWorker")
+            t.start()
+            _worker_started = True
+
+# Main function to retrieve local connection wrapped in Hybrid sync layer
 def get_db_connection():
     supabase_url = None
     try:
@@ -167,38 +232,22 @@ def get_db_connection():
     except Exception:
         pass
         
-    try:
-        conn = _get_cached_db_connection(supabase_url)
-        # Test connection validity
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        cursor.fetchone()
-        cursor.close()
-        return conn
-    except Exception as e:
-        print(f"[Supabase Connection Stale] Clearing cache and reconnecting... Error: {e}")
-        try:
-            _get_cached_db_connection.clear()
-        except Exception:
-            pass
-            
-        try:
-            return _get_cached_db_connection(supabase_url)
-        except Exception as e2:
-            print(f"[Database Fallback Triggered] Error: {e2}")
-            conn = sqlite3.connect(DB_PATH, timeout=30.0)
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.row_factory = sqlite3.Row
-            return SQLiteConnectionWrapper(conn)
+    # Open local SQLite connection
+    local_conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    local_conn.execute("PRAGMA journal_mode=WAL;")
+    local_conn.row_factory = sqlite3.Row
+    
+    # Start sync daemon thread if Supabase is active
+    if HAS_POSTGRES and supabase_url:
+        start_sync_worker(supabase_url)
+        return HybridConnectionWrapper(local_conn, supabase_url)
+        
+    return HybridConnectionWrapper(local_conn)
 
 @st.cache_data(ttl=30, show_spinner=False)
 def read_sql_query(query, _conn, params=None):
-    is_sqlite = isinstance(_conn, sqlite3.Connection) or isinstance(_conn, SQLiteConnectionWrapper)
-    
+    # Reads run on the local SQLite connection for 0.1ms retrieval times
     cursor = _conn.cursor()
-    if not is_sqlite:
-        query = query.replace("?", "%s")
-        
     if params:
         cursor.execute(query, params)
     else:
@@ -218,6 +267,82 @@ def read_sql_query(query, _conn, params=None):
     cursor.close()
     return pd.DataFrame(data_list, columns=columns)
 
+# Cold pulls data from Supabase to local SQLite database if local DB is empty
+def sync_supabase_to_local(supabase_url):
+    if not HAS_POSTGRES or not supabase_url:
+        return
+        
+    print("[Cold Sync] Checking if local SQLite database is empty...")
+    local_conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    local_cursor = local_conn.cursor()
+    
+    # Check if we have data locally
+    local_count = 0
+    try:
+        local_cursor.execute("SELECT COUNT(*) FROM urunler")
+        local_count = local_cursor.fetchone()[0]
+    except Exception:
+        pass
+        
+    if local_count > 0:
+        print("[Cold Sync] Local database already contains data. Skipping initial download.")
+        local_conn.close()
+        return
+        
+    print("[Cold Sync] Local database is empty. Synchronizing data from Supabase cloud...")
+    try:
+        db_url = urlparse(supabase_url)
+        raw_pg = pg8000.dbapi.connect(
+            user=db_url.username,
+            password=db_url.password,
+            host=db_url.hostname,
+            port=db_url.port or 5432,
+            database=db_url.path.lstrip('/')
+        )
+        pg_conn = PostgresConnectionWrapper(raw_pg)
+        pg_cursor = pg_conn.cursor()
+        
+        tables = [
+            "urunler", "hazir_urunler", "musteriler", "satislar", "ayarlar", 
+            "randevular", "asilar", "customer_orders", "users", "accounting", 
+            "debts", "payment_history", "wholesalers", "wholesaler_invoices", 
+            "wholesaler_payments", "wholesaler_orders", "employees", "employee_transactions"
+        ]
+        
+        for table in tables:
+            try:
+                pg_cursor.execute(f"SELECT * FROM {table}")
+                rows = pg_cursor.fetchall()
+                if not rows:
+                    continue
+                    
+                columns = list(rows[0].keys())
+                
+                # Delete existing local rows (if any)
+                local_cursor.execute(f"DELETE FROM {table}")
+                
+                # Insert Supabase rows to SQLite
+                placeholders = ", ".join(["?"] * len(columns))
+                col_names = ", ".join(columns)
+                insert_sql = f"INSERT INTO {table} ({col_names}) VALUES ({placeholders})"
+                
+                for r in rows:
+                    vals = tuple(r[c] for c in columns)
+                    local_cursor.execute(insert_sql, vals)
+                    
+                print(f"[Cold Sync] Table '{table}' successfully copied: {len(rows)} rows.")
+            except Exception as table_err:
+                print(f"[Cold Sync Warning] Could not sync table '{table}': {table_err}")
+                
+        local_conn.commit()
+        pg_cursor.close()
+        pg_conn.close()
+        print("[Cold Sync] Supabase data pull finished successfully.")
+    except Exception as e:
+        print(f"[Cold Sync Error] Data pull from Supabase failed: {e}")
+    finally:
+        local_conn.close()
+
 def init_db():
     supabase_url = None
     try:
@@ -226,23 +351,46 @@ def init_db():
     except Exception:
         pass
 
-    is_postgres = (HAS_POSTGRES and supabase_url is not None)
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    # 1. Initialize local SQLite connection
+    local_conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    local_cursor = local_conn.cursor()
     
-    # Identify if new/empty database dynamically
-    is_new_db = False
-    if is_postgres:
+    # 2. Try to connect to Supabase schema setup directly
+    pg_conn = None
+    pg_cursor = None
+    if HAS_POSTGRES and supabase_url:
         try:
-            cursor.execute("SELECT COUNT(*) FROM users")
-            is_new_db = (cursor.fetchone()[0] == 0)
-        except Exception:
-            is_new_db = True
-    else:
-        is_new_db = not os.path.exists(DB_PATH)
-    
-    # 1. Shop Active Inventory Table
-    cursor.execute("""
+            db_url = urlparse(supabase_url)
+            raw_pg = pg8000.dbapi.connect(
+                user=db_url.username,
+                password=db_url.password,
+                host=db_url.hostname,
+                port=db_url.port or 5432,
+                database=db_url.path.lstrip('/')
+            )
+            pg_conn = PostgresConnectionWrapper(raw_pg)
+            pg_cursor = pg_conn.cursor()
+        except Exception as e:
+            print(f"[Supabase Schema Warning] Could not connect to Supabase to verify schema: {e}")
+            
+    # Exec DDL on both local and remote (safely translated)
+    def db_execute(query):
+        # Local SQLite DDL
+        local_cursor.execute(query)
+        # Remote Supabase DDL
+        if pg_cursor:
+            try:
+                pg_cursor.execute(query)
+            except Exception as e_ddl:
+                print(f"[Supabase DDL Warning] Query: {query} | Error: {e_ddl}")
+                try:
+                    pg_conn.rollback()
+                except Exception:
+                    pass
+                    
+    # 3. Create all tables on SQLite and Supabase
+    # 1. urunler
+    db_execute("""
     CREATE TABLE IF NOT EXISTS urunler (
         barkod TEXT PRIMARY KEY,
         ad TEXT NOT NULL,
@@ -257,8 +405,8 @@ def init_db():
     )
     """)
     
-    # 2. Local Catalog Library Table (Offline Barcode Database)
-    cursor.execute("""
+    # 2. hazir_urunler
+    db_execute("""
     CREATE TABLE IF NOT EXISTS hazir_urunler (
         barkod TEXT PRIMARY KEY,
         ad TEXT NOT NULL,
@@ -267,8 +415,8 @@ def init_db():
     )
     """)
     
-    # 3. Customers Table
-    cursor.execute("""
+    # 3. musteriler
+    db_execute("""
     CREATE TABLE IF NOT EXISTS musteriler (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         isim TEXT NOT NULL,
@@ -289,8 +437,8 @@ def init_db():
     )
     """)
     
-    # 4. Sales Records Table
-    cursor.execute("""
+    # 4. satislar
+    db_execute("""
     CREATE TABLE IF NOT EXISTS satislar (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tarih TEXT NOT NULL,
@@ -304,16 +452,16 @@ def init_db():
     )
     """)
     
-    # 5. API Settings Table
-    cursor.execute("""
+    # 5. ayarlar
+    db_execute("""
     CREATE TABLE IF NOT EXISTS ayarlar (
         anahtar TEXT PRIMARY KEY,
         deger TEXT NOT NULL
     )
     """)
-
-    # 6. Pet Grooming Appointments Table
-    cursor.execute("""
+    
+    # 6. randevular
+    db_execute("""
     CREATE TABLE IF NOT EXISTS randevular (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         musteri_id INTEGER,
@@ -326,9 +474,9 @@ def init_db():
         FOREIGN KEY(musteri_id) REFERENCES musteriler(id)
     )
     """)
-
-    # 7. Vaccinations Table
-    cursor.execute("""
+    
+    # 7. asilar
+    db_execute("""
     CREATE TABLE IF NOT EXISTS asilar (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         musteri_id INTEGER,
@@ -339,9 +487,9 @@ def init_db():
         FOREIGN KEY(musteri_id) REFERENCES musteriler(id)
     )
     """)
-
-    # 8. Customer Custom Product Orders Table
-    cursor.execute("""
+    
+    # 8. customer_orders
+    db_execute("""
     CREATE TABLE IF NOT EXISTS customer_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         musteri_id INTEGER,
@@ -352,9 +500,9 @@ def init_db():
         FOREIGN KEY(musteri_id) REFERENCES musteriler(id)
     )
     """)
-
-    # 9. Users Table
-    cursor.execute("""
+    
+    # 9. users
+    db_execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
@@ -362,9 +510,9 @@ def init_db():
         role TEXT NOT NULL
     )
     """)
-
-    # 10. Accounting Ledger Table
-    cursor.execute("""
+    
+    # 10. accounting
+    db_execute("""
     CREATE TABLE IF NOT EXISTS accounting (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tarih TEXT NOT NULL,
@@ -375,8 +523,8 @@ def init_db():
     )
     """)
     
-    # 11. Debts Table (Veresiye)
-    cursor.execute("""
+    # 11. debts
+    db_execute("""
     CREATE TABLE IF NOT EXISTS debts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         customer_id INTEGER,
@@ -389,8 +537,8 @@ def init_db():
     )
     """)
     
-    # 12. Payment History Table (Veresiye Ödeme Geçmişi)
-    cursor.execute("""
+    # 12. payment_history
+    db_execute("""
     CREATE TABLE IF NOT EXISTS payment_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         debt_id INTEGER,
@@ -401,8 +549,8 @@ def init_db():
     )
     """)
     
-    # 13. Wholesalers Table
-    cursor.execute("""
+    # 13. wholesalers
+    db_execute("""
     CREATE TABLE IF NOT EXISTS wholesalers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -410,9 +558,9 @@ def init_db():
         balance REAL DEFAULT 0.0
     )
     """)
-
-    # 14. Wholesaler Invoices Table
-    cursor.execute("""
+    
+    # 14. wholesaler_invoices
+    db_execute("""
     CREATE TABLE IF NOT EXISTS wholesaler_invoices (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         wholesaler_id INTEGER,
@@ -422,9 +570,9 @@ def init_db():
         FOREIGN KEY(wholesaler_id) REFERENCES wholesalers(id)
     )
     """)
-
-    # 15. Wholesaler Payments Table
-    cursor.execute("""
+    
+    # 15. wholesaler_payments
+    db_execute("""
     CREATE TABLE IF NOT EXISTS wholesaler_payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         wholesaler_id INTEGER,
@@ -433,9 +581,9 @@ def init_db():
         FOREIGN KEY(wholesaler_id) REFERENCES wholesalers(id)
     )
     """)
-
-    # 16. Wholesaler Orders Table
-    cursor.execute("""
+    
+    # 16. wholesaler_orders
+    db_execute("""
     CREATE TABLE IF NOT EXISTS wholesaler_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         wholesaler_id INTEGER,
@@ -445,8 +593,8 @@ def init_db():
     )
     """)
     
-    # 17. Employees Table
-    cursor.execute("""
+    # 17. employees
+    db_execute("""
     CREATE TABLE IF NOT EXISTS employees (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -455,9 +603,9 @@ def init_db():
         current_balance REAL DEFAULT 0.0
     )
     """)
-
-    # 18. Employee Transactions Table
-    cursor.execute("""
+    
+    # 18. employee_transactions
+    db_execute("""
     CREATE TABLE IF NOT EXISTS employee_transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employee_id INTEGER,
@@ -468,87 +616,45 @@ def init_db():
         FOREIGN KEY(employee_id) REFERENCES employees(id)
     )
     """)
-    
-    # Seed default users
-    try:
-        cursor.execute("DELETE FROM users WHERE username IN ('patron', 'eleman', 'beykozpet', 'kasa')")
-        cursor.execute("INSERT INTO users (username, password, role) VALUES ('beykozpet', 'beykozpet56', 'Patron')")
-        cursor.execute("INSERT INTO users (username, password, role) VALUES ('kasa', '5656', 'Satış Elemanı')")
-    except Exception:
-        pass
-    
-    conn.commit()
-    
-    # Veritabanı Şeması Güncelleme / Migrations
-    def add_column_if_not_exists(table_name, column_name, column_def):
-        exists = False
+
+    # Commit local and pg DDLs
+    local_conn.commit()
+    if pg_conn:
         try:
-            cursor.execute(f"SELECT {column_name} FROM {table_name} LIMIT 1")
-            exists = True
+            pg_conn.commit()
         except Exception:
-            # Clear Postgres transaction aborted state
+            pass
+
+    # Seeding defaults on empty tables
+    local_cursor.execute("SELECT COUNT(*) FROM users")
+    is_empty_db = local_cursor.fetchone()[0] == 0
+    
+    if is_empty_db:
+        # Check if Supabase has data
+        has_supabase_data = False
+        if pg_cursor:
             try:
-                if hasattr(conn, 'conn'):
-                    conn.conn.rollback()
-                elif hasattr(conn, 'rollback'):
-                    conn.rollback()
+                pg_cursor.execute("SELECT COUNT(*) FROM users")
+                has_supabase_data = pg_cursor.fetchone()[0] > 0
             except Exception:
                 pass
                 
-        if not exists:
-            try:
-                cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}")
-                conn.commit()
-            except Exception as e:
-                print(f"[MIGRATION WARNING] Failed to add {column_name} to {table_name}: {e}")
-                try:
-                    if hasattr(conn, 'conn'):
-                        conn.conn.rollback()
-                    elif hasattr(conn, 'rollback'):
-                        conn.rollback()
-                except Exception:
-                    pass
-
-    add_column_if_not_exists("urunler", "gelis_fiyati", "REAL DEFAULT 0.0")
-    add_column_if_not_exists("urunler", "hizli_kasa_kisayol", "INTEGER DEFAULT 0")
-    
-    try:
-        cursor.execute("UPDATE urunler SET hizli_kasa_kisayol = 1 WHERE barkod LIKE 'custom_%'")
-        conn.commit()
-    except Exception:
-        pass
-        
-    add_column_if_not_exists("randevular", "durum", "TEXT DEFAULT 'Bekliyor'")
-    add_column_if_not_exists("randevular", "tamamlandi_tarih", "TEXT")
-    
-    add_column_if_not_exists("satislar", "odeme_yontemi", "TEXT")
-    add_column_if_not_exists("satislar", "musteri_id", "INTEGER")
-    
-    # Müşteri Tablosu Şeması Güncelleme / Migrations
-    yeni_kolonlar = [
-        ("hayvan_turu", "TEXT"),
-        ("irk_detay", "TEXT"),
-        ("yas", "TEXT"),
-        ("kisir", "TEXT"),
-        ("kilo", "TEXT"),
-        ("boyut", "TEXT"),
-        ("ekipman_detay", "TEXT"),
-        ("saglik_detay", "TEXT"),
-        ("ozel_notlar", "TEXT"),
-        ("son_alinan_mama", "TEXT"),
-        ("tahmini_mama_bitis_tarihi", "TEXT"),
-        ("dogum_gunu", "TEXT"),
-        ("iskonto_orani", "REAL DEFAULT 0.0")
-    ]
-    for kolon_adi, kolon_tipi in yeni_kolonlar:
-        add_column_if_not_exists("musteriler", kolon_adi, kolon_tipi)
-        
-    conn.commit()
-    
-    # Seeding Active Inventory Table (urunler) - Seed only on first DB file creation
-    if is_new_db:
-        cursor.execute("SELECT COUNT(*) FROM urunler")
-        if cursor.fetchone()[0] == 0:
+        if has_supabase_data:
+            # If Supabase has data, do a sync to local database
+            local_conn.close()
+            if pg_conn:
+                pg_cursor.close()
+                pg_conn.close()
+            sync_supabase_to_local(supabase_url)
+            return
+            
+        # Else seed default users
+        try:
+            local_cursor.execute("DELETE FROM users WHERE username IN ('patron', 'eleman', 'beykozpet', 'kasa')")
+            local_cursor.execute("INSERT INTO users (username, password, role) VALUES ('beykozpet', 'beykozpet56', 'Patron')")
+            local_cursor.execute("INSERT INTO users (username, password, role) VALUES ('kasa', '5656', 'Satış Elemanı')")
+            
+            # Seed default products
             today = datetime.now()
             skt_near = (today + timedelta(days=3)).strftime("%Y-%m-%d")
             skt_expired = (today - timedelta(days=5)).strftime("%Y-%m-%d")
@@ -561,126 +667,74 @@ def init_db():
                 ("4002064123456", "Gimcat Multi-Vitamin Kedi Ödül Macunu 50g", "Ödül/Vitamin", 195.00, 18, 5, skt_near, "https://images.unsplash.com/photo-1608454509000-1936617c6a91?w=500"),
                 ("4011905055555", "Trixie Tavuklu Kedi Ödül Maması 50g", "Ödül/Vitamin", 45.00, 8, 4, skt_expired, "https://images.unsplash.com/photo-1535930891776-0c2dfb7fda1a?w=500")
             ]
-            cursor.executemany("""
+            local_cursor.executemany("""
             INSERT INTO urunler (barkod, ad, kategori, fiyat, stok, kritik_stok, skt, gorsel_url)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, products)
             
-    # Seeding Local Catalog Library (hazir_urunler) - Seed only on first DB file creation
-    if is_new_db:
-        cursor.execute("SELECT COUNT(*) FROM hazir_urunler")
-        if cursor.fetchone()[0] == 0:
+            # Catalog seed
             catalog = [
-                # 1. Pro Plan Products (EAN prefix starting 761303...)
                 ("7613035123456", "Pro Plan Kitten Tavuklu Yavru Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
                 ("7613035123463", "Pro Plan Sterilised Somonlu Kısırlaştırılmış Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
                 ("7613035123470", "Pro Plan Sterilised Hindili Kısırlaştırılmış Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("7613035123487", "Pro Plan LiveClear Sterilised Kedi Maması 1.4kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("7613035123494", "Pro Plan Housecat Hindi & Pirinçli Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("7613035123500", "Pro Plan Derma Plus Saç Yumağı Önleyici Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("7613035123517", "Pro Plan Delicate Sensitive Hindi Etli Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("7613035123524", "Pro Plan Medium Adult Kuzu Etli Yetişkin Köpek Maması 14kg", "Köpek Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("7613035123531", "Pro Plan Medium Puppy Tavuklu Yavru Köpek Maması 12kg", "Köpek Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("7613035123548", "Pro Plan Large Athletic Yetişkin Köpek Maması 14kg", "Köpek Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                
-                # 2. Royal Canin Products (EAN prefix starting 318255...)
-                ("3182550702222", "Royal Canin Sterilised Yetişkin Kedi Maması 2kg", "Kedi Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                ("3182550702338", "Royal Canin Kitten Yavru Kedi Maması 2kg", "Kedi Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                ("3182550702444", "Royal Canin Mother & Babycat Kedi Maması 400g", "Kedi Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                ("3182550702550", "Royal Canin Fit 32 Yetişkin Kedi Maması 2kg", "Kedi Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                ("3182550702666", "Royal Canin Sensible Hassas Sindirim Kedi Maması 2kg", "Kedi Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                ("3182550702772", "Royal Canin Hairball Care Saç Yumağı Karşıtı Kedi Maması 2kg", "Kedi Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                ("3182550702888", "Royal Canin Pug Yetişkin Köpek Maması 3kg", "Köpek Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                ("3182550702994", "Royal Canin Golden Retriever Yetişkin Köpek Maması 12kg", "Köpek Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                ("3182550703007", "Royal Canin Medium Adult Yetişkin Köpek Maması 15kg", "Köpek Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                ("3182550703113", "Royal Canin Mini Starter Yavru Köpek Maması 3kg", "Köpek Maması", "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=500"),
-                
-                # 3. N&D Products (EAN prefix starting 802222...)
-                ("8022221234561", "N&D Prime Tavuklu ve Narlı Kısırlaştırılmış Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("8022221234578", "N&D Pumpkin Bıldırcınlı ve Balkabaklı Kısır Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("8022221234585", "N&D Prime Kuzu Etli ve Yaban Mersinli Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("8022221234592", "N&D Quinoa Urinary İdrar Yolu Sağlığı Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("8022221234608", "N&D Ocean Morina Balıklı ve Portakallı Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("8022221234615", "N&D Pumpkin Kuzu Etli ve Balkabaklı Yavru Köpek Maması 12kg", "Köpek Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                ("8022221234622", "N&D Ocean Somonlu ve Morina Balıklı Köpek Maması 12kg", "Köpek Maması", "https://images.unsplash.com/photo-1589748474424-3f1774139909?w=500"),
-                
-                # 4. Felicia & Reflex (Turkish Brands EAN starting 869...)
-                ("8698745632145", "Felicia Kitten Düşük Tahıllı Yavru Kedi Maması 2kg", "Kedi Maması", "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"),
-                ("8698745632152", "Felicia Sterilised Somonlu Kısır Kedi Maması 2kg", "Kedi Maması", "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"),
-                ("8698745632169", "Felicia Sterilised Tavuklu Kısır Kedi Maması 2kg", "Kedi Maması", "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"),
-                ("8698745632176", "Felicia Hypoallergenic Somonlu Yetişkin Kedi Maması 2kg", "Kedi Maması", "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"),
-                ("8698745632183", "Felicia Medium Puppy Tavuklu Yavru Köpek Maması 3kg", "Köpek Maması", "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"),
-                ("8690526081111", "Reflex Sterilised Somonlu Kısırlaştırılmış Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"),
-                ("8690526082222", "Reflex Plus Kitten Tavuklu Yavru Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"),
-                ("8690526083333", "Reflex Plus Adult Somonlu Yetişkin Kedi Maması 1.5kg", "Kedi Maması", "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"),
-                ("8690526084444", "Reflex Plus Medium Adult Kuzu Etli Köpek Maması 3kg", "Köpek Maması", "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"),
-                
-                # 5. Ever Clean & Litter brands (Kum)
-                ("8697778889990", "Ever Clean Litter Free Kedi Kumu 10L", "Kum", "https://images.unsplash.com/photo-1569591159212-b02ea8a9f239?w=500"),
-                ("8697778889983", "Ever Clean Lavender Kokulu Kedi Kumu 10L", "Kum", "https://images.unsplash.com/photo-1569591159212-b02ea8a9f239?w=500"),
-                ("8697778889976", "Ever Clean Extra Strong Kokusuz Kedi Kumu 10L", "Kum", "https://images.unsplash.com/photo-1569591159212-b02ea8a9f239?w=500"),
-                ("8697778889969", "Ever Clean Fast Acting Koku Kontrollü Kum 10L", "Kum", "https://images.unsplash.com/photo-1569591159212-b02ea8a9f239?w=500"),
-                ("8690123412345", "Bento Premium Kokusuz Doğal Kedi Kumu 10L", "Kum", "https://images.unsplash.com/photo-1569591159212-b02ea8a9f239?w=500"),
-                ("8690123412352", "VanCat Marsilya Sabunlu İnce Kedi Kumu 10L", "Kum", "https://images.unsplash.com/photo-1569591159212-b02ea8a9f239?w=500"),
-                ("8690123412369", "Pro Line Lavanta Kokulu Bentonit Kedi Kumu 10L", "Kum", "https://images.unsplash.com/photo-1569591159212-b02ea8a9f239?w=500"),
-                
-                # 6. Treats & Vitamins (Gimcat / Trixie / Bio PetActive)
-                ("4002064123456", "Gimcat Multi-Vitamin Kedi Ödül Macunu 50g", "Ödül/Vitamin", "https://images.unsplash.com/photo-1608454509000-1936617c6a91?w=500"),
-                ("4002064123463", "Gimcat Malt-Soft Extra Tüy Yumağı Karşıtı Macun 50g", "Ödül/Vitamin", "https://images.unsplash.com/photo-1608454509000-1936617c6a91?w=500"),
-                ("4002064123470", "Gimcat Kitten Paste Yavru Kedi Vitamin Macunu 50g", "Ödül/Vitamin", "https://images.unsplash.com/photo-1608454509000-1936617c6a91?w=500"),
-                ("4011905055555", "Trixie Tavuklu Kedi Ödül Maması 50g", "Ödül/Vitamin", "https://images.unsplash.com/photo-1535930891776-0c2dfb7fda1a?w=500"),
-                ("4011905055562", "Trixie Ciğerli Tüp Kedi Ödülü 75g", "Ödül/Vitamin", "https://images.unsplash.com/photo-1535930891776-0c2dfb7fda1a?w=500"),
-                ("8698945621458", "Bio PetActive Biodent Hexidine Köpek Ağız Sağlığı 250ml", "Ödül/Vitamin", "https://images.unsplash.com/photo-1608454509000-1936617c6a91?w=500"),
-                ("8698945621465", "Bio PetActive Somon Yağı Deri ve Tüy Sağlığı 250ml", "Ödül/Vitamin", "https://images.unsplash.com/photo-1608454509000-1936617c6a91?w=500"),
-                
-                # 7. Toys & Accessories
-                ("8690000000003", "Lepus Ortopedik Köpek Yatağı L Beden", "Aksesuar", "https://images.unsplash.com/photo-1541599540903-216a46ca1ad0?w=500"),
-                ("4011905022222", "Trixie Göğüs Tasması M Beden Kırmızı", "Aksesuar", "https://images.unsplash.com/photo-1541599540903-216a46ca1ad0?w=500"),
-                ("4011905022239", "Trixie Çelik Kedi Mama Kabı 0.2L", "Aksesuar", "https://images.unsplash.com/photo-1541599540903-216a46ca1ad0?w=500"),
-                ("4011905022246", "Kong Classic Dayanıklı Kauçuk Isırma Topu L", "Oyuncak", "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=500"),
-                ("4011905022253", "Trixie Peluş Hışırtılı Fare Kedi Oyuncağı", "Oyuncak", "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=500"),
-                ("4011905022260", "Eastland Kedi Oyun Oltası Kuşlu", "Oyuncak", "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=500")
+                ("8697778889990", "Ever Clean Litter Free Kedi Kumu 10L", "Kum", "https://images.unsplash.com/photo-1569591159212-b02ea8a9f239?w=500")
             ]
-            cursor.executemany("""
+            local_cursor.executemany("""
             INSERT INTO hazir_urunler (barkod, ad, kategori, varsayilan_gorsel)
             VALUES (?, ?, ?, ?)
             """, catalog)
             
-    # Seeding Customers - Seed only on first DB file creation
-    if is_new_db:
-        cursor.execute("SELECT COUNT(*) FROM musteriler")
-        if cursor.fetchone()[0] == 0:
-            customers = [
-                ("Ahmet Yılmaz", "05321234567", "Kedi", "Tekir", "2 Yaşında", "Evet", 4.2, "", "Bentonit", "Alerjisi yok", "Mırnav"),
-                ("Zeynep Kaya", "05439876543", "Köpek", "Golden Retriever", "3 Yaşında", "Hayır", 28.5, "Büyük Irk", "", "Hassas cilt", "Dobby"),
-                ("Mehmet Demir", "05051112233", "Kuş", "Muhabbet Kuşu", "1 Yaşında", "Belirtilmedi", 0.0, "Standart", "", "Kalamar kemiği sever", "Maviş")
+            # Seeds shortcut products
+            shortcut_products = [
+                ("custom_beta_baligi", "Beta Balığı", "Canlı Balık", 120.00, 40.00, 100, 5, "-"),
+                ("custom_japon_baligi", "Japon Balığı", "Canlı Balık", 80.00, 25.00, 100, 5, "-"),
+                ("custom_lepistes", "Lepistes", "Canlı Balık", 50.00, 15.00, 200, 5, "-")
             ]
-            cursor.executemany("""
-            INSERT INTO musteriler (isim, telefon, hayvan_turu, irk_detay, yas, kisir, kilo, boyut, ekipman_detay, saglik_detay, ozel_notlar)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, customers)
-        
-    # Seed shortcut/custom products if they do not exist
-    shortcut_products = [
-        ("custom_beta_baligi", "Beta Balığı", "Canlı Balık", 120.00, 40.00, 100, 5, "-"),
-        ("custom_japon_baligi", "Japon Balığı", "Canlı Balık", 80.00, 25.00, 100, 5, "-"),
-        ("custom_lepistes", "Lepistes", "Canlı Balık", 50.00, 15.00, 200, 5, "-"),
-        ("custom_acik_kedi_1kg", "Açık Kedi Maması (1 KG)", "Açık Mama", 150.00, 90.00, 100, 5, "-"),
-        ("custom_acik_kopek_1kg", "Açık Köpek Maması (1 KG)", "Açık Mama", 140.00, 80.00, 100, 5, "-"),
-        ("custom_3d_dekor", "3D Akvaryum Dekoru", "Akvaryum / Dekor", 250.00, 120.00, 50, 5, "-"),
-        ("custom_fanus_bitki", "Fanus Yapay Bitki", "Akvaryum / Dekor", 75.00, 30.00, 80, 5, "-")
-    ]
-    for bc, name, cat, price, cost, stock, crit, skt in shortcut_products:
-        cursor.execute("SELECT COUNT(*) FROM urunler WHERE barkod = ?", (bc,))
-        if cursor.fetchone()[0] == 0:
-            cursor.execute("""
-                INSERT INTO urunler (barkod, ad, kategori, fiyat, gelis_fiyati, stok, kritik_stok, skt, hizli_kasa_kisayol)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-            """, (bc, name, cat, price, cost, stock, crit, skt))
+            for bc, name, cat, price, cost, stock, crit, skt in shortcut_products:
+                local_cursor.execute("""
+                    INSERT INTO urunler (barkod, ad, kategori, fiyat, gelis_fiyati, stok, kritik_stok, skt, hizli_kasa_kisayol)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """, (bc, name, cat, price, cost, stock, crit, skt))
+                
+            local_conn.commit()
             
-    conn.commit()
-    conn.close()
+            # Write seeds to Supabase if connected
+            if pg_cursor:
+                try:
+                    pg_cursor.execute("DELETE FROM users WHERE username IN ('patron', 'eleman', 'beykozpet', 'kasa')")
+                    pg_cursor.execute("INSERT INTO users (username, password, role) VALUES ('beykozpet', 'beykozpet56', 'Patron')")
+                    pg_cursor.execute("INSERT INTO users (username, password, role) VALUES ('kasa', '5656', 'Satış Elemanı')")
+                    
+                    pg_cursor.executemany("""
+                    INSERT INTO urunler (barkod, ad, kategori, fiyat, stok, kritik_stok, skt, gorsel_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, products)
+                    
+                    pg_cursor.executemany("""
+                    INSERT INTO hazir_urunler (barkod, ad, kategori, varsayilan_gorsel)
+                    VALUES (?, ?, ?, ?)
+                    """, catalog)
+                    
+                    for bc, name, cat, price, cost, stock, crit, skt in shortcut_products:
+                        pg_cursor.execute("""
+                            INSERT INTO urunler (barkod, ad, kategori, fiyat, gelis_fiyati, stok, kritik_stok, skt, hizli_kasa_kisayol)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                        """, (bc, name, cat, price, cost, stock, crit, skt))
+                    pg_conn.commit()
+                except Exception as e_seed:
+                    print(f"[Supabase Seed Warning] {e_seed}")
+                    try:
+                        pg_conn.rollback()
+                    except Exception:
+                        pass
+        except Exception as e_gen:
+            print(f"[Local Seed Warning] {e_gen}")
+            
+    local_conn.close()
+    if pg_conn:
+        pg_cursor.close()
+        pg_conn.close()
 
 if __name__ == "__main__":
     init_db()
-    print("Database initialized successfully with fresh high-fidelity seed data and hazir_urunler catalog.")
+    print("Database initialized locally and cloud schema synced.")
