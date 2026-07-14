@@ -44,6 +44,12 @@ from scraper import scrape_barcode_online
 from ai_engine import clean_scraped_data_with_ai, get_smart_recommendations
 from qnb_billing import import_invoice_to_stock, MOCK_XML_INVOICE
 
+# Declare custom barcode scanner component
+import streamlit.components.v1 as components
+parent_dir = os.path.dirname(os.path.abspath(__file__))
+scanner_dir = os.path.join(parent_dir, "barcode_scanner")
+scanner_component = components.declare_component("barcode_scanner", path=scanner_dir)
+
 # Helper function for sending WhatsApp reminders (pywhatkit with webbrowser fallback)
 def send_whatsapp_reminder(phone, message):
     clean_tel = "".join(filter(str.isdigit, phone))
@@ -700,100 +706,14 @@ if menu == "🛒 Hızlı POS Kasa":
         
         with col_scan_pos:
             with st.expander("📸 Kameradan Barkod Tara (Mobil)", expanded=False):
-                html_code_pos = """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
-                </head>
-                <body style="margin:0; padding:0; background-color: #0b0e14; overflow:hidden;">
-                    <div style="background-color: #0b0e14; border: 1px solid rgba(0, 173, 181, 0.2); border-radius: 12px; padding: 15px; text-align: center; font-family: sans-serif;">
-                        <div id="reader" style="width: 100%; max-width: 320px; margin: 0 auto; border-radius: 8px; overflow: hidden; background: #000;"></div>
-                        <div id="status" style="margin-top: 10px; font-size: 0.9em; color: #a7f3d0;">📷 Kamera hazır. Barkodu hizalayın.</div>
-                        <button id="start-btn" style="background: linear-gradient(135deg, #00adb5 0%, #00f2fe 100%); color: #000; border: none; padding: 12px 20px; font-weight: bold; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; font-size: 1.1em;">📷 Kamerayı Başlat</button>
-                        <button id="stop-btn" style="background: #ef4444; color: #fff; border: none; padding: 12px 20px; font-weight: bold; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; display: none; font-size: 1.1em;">🛑 Kamerayı Kapat</button>
-                    </div>
-                    
-                    <script>
-                        const startBtn = document.getElementById("start-btn");
-                        const stopBtn = document.getElementById("stop-btn");
-                        const statusDiv = document.getElementById("status");
-                        let html5QrCode = null;
-
-                        startBtn.addEventListener("click", () => {
-                            statusDiv.innerText = "🔄 Kamera başlatılıyor...";
-                            startBtn.style.display = "none";
-                            stopBtn.style.display = "block";
-                            
-                            html5QrCode = new Html5Qrcode("reader");
-                            
-                            const config = { 
-                                fps: 20, 
-                                qrbox: { width: 250, height: 150 },
-                                aspectRatio: 1.777778
-                            };
-                            
-                            const videoConstraints = {
-                                facingMode: "environment",
-                                advanced: [{ focusMode: "continuous" }]
-                            };
-                            
-                            const successCallback = (decodedText, decodedResult) => {
-                                statusDiv.innerText = "✅ Barkod Algılandı: " + decodedText;
-                                
-                                if (navigator.vibrate) {
-                                    navigator.vibrate(100);
-                                }
-                                
-                                html5QrCode.stop().then(() => {
-                                    try {
-                                        let targetUrl = document.referrer;
-                                        if (!targetUrl || targetUrl.includes("android-app://") || targetUrl.includes("ios-app://")) {
-                                            targetUrl = window.top.location.href;
-                                        }
-                                        const parentUrl = new URL(targetUrl);
-                                        parentUrl.searchParams.set("barcode", decodedText);
-                                        window.parent.location.href = parentUrl.toString();
-                                    } catch (e) {
-                                        console.error("CORS redirect blocked, trying fallback:", e);
-                                        try {
-                                            window.parent.location.search = "?barcode=" + encodeURIComponent(decodedText);
-                                        } catch (e2) {
-                                            window.location.search = "?barcode=" + encodeURIComponent(decodedText);
-                                        }
-                                    }
-                                });
-                            };
-                            
-                            html5QrCode.start(videoConstraints, config, successCallback)
-                                .catch((err) => {
-                                    console.warn(err);
-                                    html5QrCode.start({ facingMode: "user" }, config, successCallback)
-                                        .then(() => { statusDiv.innerText = "📷 Ön kamera aktif. Barkodu yaklaştırın."; })
-                                        .catch((err2) => {
-                                            statusDiv.innerText = "❌ Kamera izin engeli! Lütfen tarayıcı ayarlarından kameraya izin verin.";
-                                            startBtn.style.display = "block";
-                                            stopBtn.style.display = "none";
-                                        });
-                                });
-                        });
-
-                        stopBtn.addEventListener("click", () => {
-                            if (html5QrCode) {
-                                html5QrCode.stop().then(() => {
-                                    statusDiv.innerText = "🛑 Kamera kapatıldı.";
-                                    startBtn.style.display = "block";
-                                    stopBtn.style.display = "none";
-                                });
-                            }
-                        });
-                    </script>
-                </body>
-                </html>
-                """
-                import html
-                escaped_html_pos = html.escape(html_code_pos)
-                st.markdown(f'<iframe srcdoc="{escaped_html_pos}" allow="camera; microphone" style="width: 100%; height: 350px; border: none; overflow: hidden; border-radius: 12px;"></iframe>', unsafe_allow_html=True)
+                if "last_pos_scan" not in st.session_state:
+                    st.session_state.last_pos_scan = ""
+                scanned_val = scanner_component(key="pos_camera_scanner")
+                if scanned_val and scanned_val != st.session_state.last_pos_scan:
+                    st.session_state.barcode_scan_input = scanned_val
+                    st.session_state.last_pos_scan = scanned_val
+                    st.toast(f"✅ Okundu: {scanned_val}", icon="⚡")
+                    st.rerun()
             # Scanner input simulation with key binding for programmatic clearing
             barcode_input = st.text_input(
                 "Barkod Okutun veya Yazın (Enter):", 
@@ -1533,100 +1453,14 @@ elif menu == "📦 Stok ve Ürünler":
 
             # 📸 Kameradan Barkod Okut (Mobile touch-optimized layout)
             with st.expander("📸 Kameradan Barkod Tara", expanded=False):
-                html_code_stock = """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
-                </head>
-                <body style="margin:0; padding:0; background-color: #0b0e14; overflow:hidden;">
-                    <div style="background-color: #0b0e14; border: 1px solid rgba(0, 173, 181, 0.2); border-radius: 12px; padding: 15px; text-align: center; font-family: sans-serif;">
-                        <div id="reader" style="width: 100%; max-width: 320px; margin: 0 auto; border-radius: 8px; overflow: hidden; background: #000;"></div>
-                        <div id="status" style="margin-top: 10px; font-size: 0.9em; color: #a7f3d0;">📷 Kamera hazır. Barkodu hizalayın.</div>
-                        <button id="start-btn" style="background: linear-gradient(135deg, #00adb5 0%, #00f2fe 100%); color: #000; border: none; padding: 12px 20px; font-weight: bold; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; font-size: 1.1em;">📷 Kamerayı Başlat</button>
-                        <button id="stop-btn" style="background: #ef4444; color: #fff; border: none; padding: 12px 20px; font-weight: bold; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; display: none; font-size: 1.1em;">🛑 Kamerayı Kapat</button>
-                    </div>
-                    
-                    <script>
-                        const startBtn = document.getElementById("start-btn");
-                        const stopBtn = document.getElementById("stop-btn");
-                        const statusDiv = document.getElementById("status");
-                        let html5QrCode = null;
-
-                        startBtn.addEventListener("click", () => {
-                            statusDiv.innerText = "🔄 Kamera başlatılıyor...";
-                            startBtn.style.display = "none";
-                            stopBtn.style.display = "block";
-                            
-                            html5QrCode = new Html5Qrcode("reader");
-                            
-                            const config = { 
-                                fps: 20, 
-                                qrbox: { width: 250, height: 150 },
-                                aspectRatio: 1.777778
-                            };
-                            
-                            const videoConstraints = {
-                                facingMode: "environment",
-                                advanced: [{ focusMode: "continuous" }]
-                            };
-                            
-                            const successCallback = (decodedText, decodedResult) => {
-                                statusDiv.innerText = "✅ Barkod Algılandı: " + decodedText;
-                                
-                                if (navigator.vibrate) {
-                                    navigator.vibrate(100);
-                                }
-                                
-                                html5QrCode.stop().then(() => {
-                                    try {
-                                        let targetUrl = document.referrer;
-                                        if (!targetUrl || targetUrl.includes("android-app://") || targetUrl.includes("ios-app://")) {
-                                            targetUrl = window.top.location.href;
-                                        }
-                                        const parentUrl = new URL(targetUrl);
-                                        parentUrl.searchParams.set("barcode", decodedText);
-                                        window.parent.location.href = parentUrl.toString();
-                                    } catch (e) {
-                                        console.error("CORS redirect blocked, trying fallback:", e);
-                                        try {
-                                            window.parent.location.search = "?barcode=" + encodeURIComponent(decodedText);
-                                        } catch (e2) {
-                                            window.location.search = "?barcode=" + encodeURIComponent(decodedText);
-                                        }
-                                    }
-                                });
-                            };
-                            
-                            html5QrCode.start(videoConstraints, config, successCallback)
-                                .catch((err) => {
-                                    console.warn(err);
-                                    html5QrCode.start({ facingMode: "user" }, config, successCallback)
-                                        .then(() => { statusDiv.innerText = "📷 Ön kamera aktif. Barkodu yaklaştırın."; })
-                                        .catch((err2) => {
-                                            statusDiv.innerText = "❌ Kamera izin engeli! Lütfen tarayıcı ayarlarından kameraya izin verin.";
-                                            startBtn.style.display = "block";
-                                            stopBtn.style.display = "none";
-                                        });
-                                });
-                        });
-
-                        stopBtn.addEventListener("click", () => {
-                            if (html5QrCode) {
-                                html5QrCode.stop().then(() => {
-                                    statusDiv.innerText = "🛑 Kamera kapatıldı.";
-                                    startBtn.style.display = "block";
-                                    stopBtn.style.display = "none";
-                                });
-                            }
-                        });
-                    </script>
-                </body>
-                </html>
-                """
-                import html
-                escaped_html_stock = html.escape(html_code_stock)
-                st.markdown(f'<iframe srcdoc="{escaped_html_stock}" allow="camera; microphone" style="width: 100%; height: 350px; border: none; overflow: hidden; border-radius: 12px;"></iframe>', unsafe_allow_html=True)
+                if "last_stock_scan" not in st.session_state:
+                    st.session_state.last_stock_scan = ""
+                scanned_val = scanner_component(key="stock_camera_scanner")
+                if scanned_val and scanned_val != st.session_state.last_stock_scan:
+                    st.session_state.stock_master_barcode = scanned_val
+                    st.session_state.last_stock_scan = scanned_val
+                    st.toast(f"✅ Okundu: {scanned_val}", icon="⚡")
+                    st.rerun()
             
             # Master Barcode Text Field (Target of Camera scans)
             master_barcode = st.text_input("⚡ Barkod Okutun veya Elle Giriş Yapın:", value=st.session_state.stock_master_barcode, placeholder="Kontrol etmek veya eklemek için okutun...", key="stock_master_barcode_input")
