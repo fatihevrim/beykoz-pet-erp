@@ -1520,6 +1520,10 @@ elif menu == "📦 Stok ve Ürünler":
                             conn.close()
                             st.toast(f"✅ Ürün güncellendi! Yeni Stok: {final_stock}", icon="⚡")
                             st.session_state.stock_master_barcode = ""  # Clear master input
+                            st.session_state.new_prod_barcode_val = ""
+                            st.session_state.new_prod_name_val = ""
+                            st.session_state.last_stock_scan = ""
+                            st.session_state.last_scraped_barcode = ""
                             st.rerun()
                             
                     with col_actions[1]:
@@ -1539,6 +1543,10 @@ elif menu == "📦 Stok ve Ürünler":
                                 conn.close()
                                 st.toast("🗑️ Ürün envanterden tamamen silindi!", icon="🗑️")
                                 st.session_state.stock_master_barcode = ""
+                                st.session_state.new_prod_barcode_val = ""
+                                st.session_state.new_prod_name_val = ""
+                                st.session_state.last_stock_scan = ""
+                                st.session_state.last_scraped_barcode = ""
                                 st.rerun()
                                 
             else:
@@ -1625,6 +1633,8 @@ elif menu == "📦 Stok ve Ürünler":
                                 st.session_state.stock_master_barcode = ""
                                 st.session_state.new_prod_barcode_val = ""
                                 st.session_state.new_prod_name_val = ""
+                                st.session_state.last_stock_scan = ""
+                                st.session_state.last_scraped_barcode = ""
                                 st.rerun()
                             conn.close()
 
