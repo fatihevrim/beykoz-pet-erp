@@ -686,9 +686,22 @@ if menu == "🛒 Hızlı POS Kasa":
                             const successCallback = (decodedText, decodedResult) => {
                                 statusDiv.innerText = "✅ Barkod Algılandı: " + decodedText;
                                 html5QrCode.stop().then(() => {
-                                    const parentUrl = new URL(document.referrer || window.top.location.href);
-                                    parentUrl.searchParams.set("barcode", decodedText);
-                                    window.top.location.href = parentUrl.toString();
+                                    try {
+                                        let targetUrl = document.referrer;
+                                        if (!targetUrl || targetUrl.includes("android-app://") || targetUrl.includes("ios-app://")) {
+                                            targetUrl = window.top.location.href;
+                                        }
+                                        const parentUrl = new URL(targetUrl);
+                                        parentUrl.searchParams.set("barcode", decodedText);
+                                        window.parent.location.href = parentUrl.toString();
+                                    } catch (e) {
+                                        console.error("CORS redirect blocked, trying fallback parent assign:", e);
+                                        try {
+                                            window.parent.location.search = "?barcode=" + encodeURIComponent(decodedText);
+                                        } catch (e2) {
+                                            window.location.search = "?barcode=" + encodeURIComponent(decodedText);
+                                        }
+                                    }
                                 });
                             };
                             
@@ -1414,150 +1427,174 @@ elif menu == "📦 Stok ve Ürünler":
                 st.success("Tebrikler! Kritik stokta veya son kullanma tarihi yaklaşmış ürün bulunmamaktadır.")
                 
     with col_edit:
-        st.markdown("### ⚡ Hızlı Güncelle / Sil")
-        if df_products.empty:
-            st.info("İşlem yapılacak ürün bulunamadı.")
+        if hasattr(st, "fragment"):
+            fragment_decorator = st.fragment
         else:
-            if "update_barcode_search_val" not in st.session_state:
-                st.session_state.update_barcode_search_val = ""
-                
-            if "barcode" in st.query_params:
-                st.session_state.update_barcode_search_val = st.query_params["barcode"]
-                del st.query_params["barcode"]
-                
-            with st.expander("📸 Kameradan Barkod Tara", expanded=False):
-                import streamlit.components.v1 as components
-                components.html(
-                    """
-                    <div style="background-color: #0b0e14; border: 1px solid rgba(0, 173, 181, 0.2); border-radius: 12px; padding: 15px; text-align: center;">
-                        <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
-                        <div id="reader" style="width: 100%; max-width: 320px; margin: 0 auto; border-radius: 8px; overflow: hidden; background: #000;"></div>
-                        <div id="status" style="margin-top: 10px; font-size: 0.9em; color: #a7f3d0; font-family: sans-serif;">📷 Kamera hazır. Taramak için hizalayın.</div>
-                        <button id="start-btn" style="background: linear-gradient(135deg, #00adb5 0%, #00f2fe 100%); color: #000; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%;">📷 Kamerayı Başlat</button>
-                        <button id="stop-btn" style="background: #ef4444; color: #fff; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%; display: none;">🛑 Kamerayı Kapat</button>
-                    </div>
-                    
-                    <script>
-                        const startBtn = document.getElementById("start-btn");
-                        const stopBtn = document.getElementById("stop-btn");
-                        const statusDiv = document.getElementById("status");
-                        let html5QrCode = null;
-                    
-                        startBtn.addEventListener("click", () => {
-                            statusDiv.innerText = "🔄 Kamera başlatılıyor...";
-                            startBtn.style.display = "none";
-                            stopBtn.style.display = "block";
-                            
-                            html5QrCode = new Html5Qrcode("reader");
-                            const config = { fps: 15, qrbox: { width: 250, height: 150 } };
-                            
-                            const successCallback = (decodedText, decodedResult) => {
-                                statusDiv.innerText = "✅ Barkod Algılandı: " + decodedText;
-                                html5QrCode.stop().then(() => {
-                                    const parentUrl = new URL(document.referrer || window.top.location.href);
-                                    parentUrl.searchParams.set("barcode", decodedText);
-                                    window.top.location.href = parentUrl.toString();
-                                });
-                            };
-                            
-                            html5QrCode.start({ facingMode: "environment" }, config, successCallback)
-                                .catch((err) => {
-                                    console.warn(err);
-                                    html5QrCode.start({ facingMode: "user" }, config, successCallback)
-                                        .then(() => { statusDiv.innerText = "📷 Ön kamera aktif. Barkodu yaklaştırın."; })
-                                        .catch((err2) => {
-                                            statusDiv.innerText = "❌ Kamera hatası: " + err2;
-                                            startBtn.style.display = "block";
-                                            stopBtn.style.display = "none";
-                                        });
-                                });
-                        });
-                    
-                        stopBtn.addEventListener("click", () => {
-                            if (html5QrCode) {
-                                html5QrCode.stop().then(() => {
-                                    statusDiv.innerText = "🛑 Kamera kapatıldı.";
-                                    startBtn.style.display = "block";
-                                    stopBtn.style.display = "none";
-                                });
-                            }
-                        });
-                    </script>
-                    """,
-                    height=350
-                )
-            
-            # Smart text filter before selectbox
-            update_barcode_search = st.text_input("⚡ Barkod Okutun veya Ürün Adı Yazın:", value=st.session_state.update_barcode_search_val, placeholder="Seçmek için barkod okutun veya yazın...")
-            
-            # Filter options list
-            filtered_prod_options = {}
-            for _, row in df_products.iterrows():
-                label = f"{row['ad']} [{row['barkod']}]"
-                if not update_barcode_search or update_barcode_search.lower() in label.lower():
-                    filtered_prod_options[row["barkod"]] = label
-                    
-            if not filtered_prod_options:
-                st.warning("Eşleşen ürün bulunamadı.")
-                selected_barcode = None
+            def fragment_decorator(func):
+                return func
+
+        @fragment_decorator
+        def render_stock_editor(products_df):
+            st.markdown("### ⚡ Hızlı Güncelle / Sil")
+            if products_df.empty:
+                st.info("İşlem yapılacak ürün bulunamadı.")
             else:
-                selected_barcode = st.selectbox(
-                    "Düzenlenecek Ürün Seçin:", 
-                    list(filtered_prod_options.keys()), 
-                    format_func=lambda x: filtered_prod_options[x]
-                )
-            
-            if selected_barcode:
-                # Fetch detailed row info
-                selected_prod = df_products[df_products["barkod"] == selected_barcode].iloc[0]
-                
-                # Edit values form
-                new_price = st.number_input("Satış Fiyatı (TL):", value=float(selected_prod["fiyat"]), min_value=0.0, step=5.0)
-                new_stock = st.number_input("Stok Miktarı:", value=int(selected_prod["stok"]), min_value=0, step=1)
-                
-                # Parse current SKT if valid
-                current_skt_str = selected_prod["skt"]
-                try:
-                    current_skt_val = datetime.strptime(current_skt_str, "%Y-%m-%d").date() if current_skt_str else datetime.today().date()
-                except Exception:
-                    current_skt_val = datetime.today().date()
+                if "update_barcode_search_val" not in st.session_state:
+                    st.session_state.update_barcode_search_val = ""
                     
-                new_skt = st.date_input("Son Tüketim Tarihi (SKT):", value=current_skt_val)
-                new_skt_str = new_skt.strftime("%Y-%m-%d")
-                
-                # Dynamic POS shortcut option
-                is_shortcut = bool(selected_prod.get("hizli_kasa_kisayol", 0))
-                new_is_shortcut = st.checkbox("Bu Ürün Hızlı Kasada Kısayol Butonu Olarak Görünsün", value=is_shortcut, key=f"shortcut_chk_{selected_barcode}")
-                
-                col_actions = st.columns(2)
-                with col_actions[0]:
-                    if st.button("⚡ Bilgileri Güncelle", type="primary", use_container_width=True):
-                        conn = get_db_connection()
-                        c = conn.cursor()
-                        c.execute("UPDATE urunler SET fiyat = ?, stok = ?, skt = ?, hizli_kasa_kisayol = ? WHERE barkod = ?", 
-                                  (new_price, new_stock, new_skt_str, 1 if new_is_shortcut else 0, selected_barcode))
-                        conn.commit()
-                        conn.close()
-                        st.toast("Ürün fiyatı, stoğu, SKT ve kısayol bilgisi başarıyla güncellendi!", icon="✅")
-                        st.rerun()
+                if "barcode" in st.query_params:
+                    st.session_state.update_barcode_search_val = st.query_params["barcode"]
+                    del st.query_params["barcode"]
+                    
+                with st.expander("📸 Kameradan Barkod Tara", expanded=False):
+                    import streamlit.components.v1 as components
+                    components.html(
+                        """
+                        <div style="background-color: #0b0e14; border: 1px solid rgba(0, 173, 181, 0.2); border-radius: 12px; padding: 15px; text-align: center;">
+                            <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+                            <div id="reader" style="width: 100%; max-width: 320px; margin: 0 auto; border-radius: 8px; overflow: hidden; background: #000;"></div>
+                            <div id="status" style="margin-top: 10px; font-size: 0.9em; color: #a7f3d0; font-family: sans-serif;">📷 Kamera hazır. Taramak için hizalayın.</div>
+                            <button id="start-btn" style="background: linear-gradient(135deg, #00adb5 0%, #00f2fe 100%); color: #000; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%;">📷 Kamerayı Başlat</button>
+                            <button id="stop-btn" style="background: #ef4444; color: #fff; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 10px; width: 100%; display: none;">🛑 Kamerayı Kapat</button>
+                        </div>
                         
-                with col_actions[1]:
-                    # Safe delete block
-                    st.markdown("<p style='font-size:0.85em; color:#ef4444; font-weight:bold; margin-bottom:2px;'>⚠️ Silme Onayı</p>", unsafe_allow_html=True)
-                    confirm_delete = st.checkbox("Tamamen silmeyi onayla", key=f"del_confirm_{selected_barcode}")
+                        <script>
+                            const startBtn = document.getElementById("start-btn");
+                            const stopBtn = document.getElementById("stop-btn");
+                            const statusDiv = document.getElementById("status");
+                            let html5QrCode = null;
+                        
+                            startBtn.addEventListener("click", () => {
+                                statusDiv.innerText = "🔄 Kamera başlatılıyor...";
+                                startBtn.style.display = "none";
+                                stopBtn.style.display = "block";
+                                
+                                html5QrCode = new Html5Qrcode("reader");
+                                const config = { fps: 15, qrbox: { width: 250, height: 150 } };
+                                
+                                const successCallback = (decodedText, decodedResult) => {
+                                    statusDiv.innerText = "✅ Barkod Algılandı: " + decodedText;
+                                    html5QrCode.stop().then(() => {
+                                        try {
+                                            let targetUrl = document.referrer;
+                                            if (!targetUrl || targetUrl.includes("android-app://") || targetUrl.includes("ios-app://")) {
+                                                targetUrl = window.top.location.href;
+                                            }
+                                            const parentUrl = new URL(targetUrl);
+                                            parentUrl.searchParams.set("barcode", decodedText);
+                                            window.parent.location.href = parentUrl.toString();
+                                        } catch (e) {
+                                            console.error("CORS redirect blocked, trying fallback parent assign:", e);
+                                            try {
+                                                window.parent.location.search = "?barcode=" + encodeURIComponent(decodedText);
+                                            } catch (e2) {
+                                                window.location.search = "?barcode=" + encodeURIComponent(decodedText);
+                                            }
+                                        }
+                                    });
+                                };
+                                
+                                html5QrCode.start({ facingMode: "environment" }, config, successCallback)
+                                    .catch((err) => {
+                                        console.warn(err);
+                                        html5QrCode.start({ facingMode: "user" }, config, successCallback)
+                                            .then(() => { statusDiv.innerText = "📷 Ön kamera aktif. Barkodu yaklaştırın."; })
+                                            .catch((err2) => {
+                                                statusDiv.innerText = "❌ Kamera hatası: " + err2;
+                                                startBtn.style.display = "block";
+                                                stopBtn.style.display = "none";
+                                            });
+                                    });
+                            });
+                        
+                            stopBtn.addEventListener("click", () => {
+                                if (html5QrCode) {
+                                    html5QrCode.stop().then(() => {
+                                        statusDiv.innerText = "🛑 Kamera kapatıldı.";
+                                        startBtn.style.display = "block";
+                                        stopBtn.style.display = "none";
+                                    });
+                                }
+                            });
+                        </script>
+                        """,
+                        height=350
+                    )
+                
+                # Smart text filter before selectbox
+                update_barcode_search = st.text_input("⚡ Barkod Okutun veya Ürün Adı Yazın:", value=st.session_state.update_barcode_search_val, placeholder="Seçmek için barkod okutun veya yazın...", key="stock_barcode_search_input")
+                
+                # Filter options list
+                filtered_prod_options = {}
+                for _, row in products_df.iterrows():
+                    label = f"{row['ad']} [{row['barkod']}]"
+                    if not update_barcode_search or update_barcode_search.lower() in label.lower():
+                        filtered_prod_options[row["barkod"]] = label
+                        
+                if not filtered_prod_options:
+                    st.warning("Eşleşen ürün bulunamadı.")
+                    selected_barcode = None
+                else:
+                    selected_barcode = st.selectbox(
+                        "Düzenlenecek Ürün Seçin:", 
+                        list(filtered_prod_options.keys()), 
+                        format_func=lambda x: filtered_prod_options[x],
+                        key="stock_product_select_box"
+                    )
+                
+                if selected_barcode:
+                    # Fetch detailed row info
+                    selected_prod = products_df[products_df["barkod"] == selected_barcode].iloc[0]
                     
-                    if st.button("🗑️ Ürünü Sil", type="secondary", use_container_width=True):
-                        if not confirm_delete:
-                            st.warning("Lütfen silmeyi onaylayın.")
-                        else:
+                    # Edit values form
+                    new_price = st.number_input("Satış Fiyatı (TL):", value=float(selected_prod["fiyat"]), min_value=0.0, step=5.0, key="stock_edit_price")
+                    new_stock = st.number_input("Stok Miktarı:", value=int(selected_prod["stok"]), min_value=0, step=1, key="stock_edit_qty")
+                    
+                    # Parse current SKT if valid
+                    current_skt_str = selected_prod["skt"]
+                    try:
+                        current_skt_val = datetime.strptime(current_skt_str, "%Y-%m-%d").date() if current_skt_str else datetime.today().date()
+                    except Exception:
+                        current_skt_val = datetime.today().date()
+                        
+                    new_skt = st.date_input("Son Tüketim Tarihi (SKT):", value=current_skt_val, key="stock_edit_skt")
+                    new_skt_str = new_skt.strftime("%Y-%m-%d")
+                    
+                    # Dynamic POS shortcut option
+                    is_shortcut = bool(selected_prod.get("hizli_kasa_kisayol", 0))
+                    new_is_shortcut = st.checkbox("Bu Ürün Hızlı Kasada Kısayol Butonu Olarak Görünsün", value=is_shortcut, key=f"shortcut_chk_{selected_barcode}")
+                    
+                    col_actions = st.columns(2)
+                    with col_actions[0]:
+                        if st.button("⚡ Bilgileri Güncelle", type="primary", use_container_width=True, key="stock_update_submit_btn"):
                             conn = get_db_connection()
                             c = conn.cursor()
-                            c.execute("DELETE FROM urunler WHERE barkod = ?", (selected_barcode,))
-                            c.execute("DELETE FROM hazir_urunler WHERE barkod = ?", (selected_barcode,))
+                            c.execute("UPDATE urunler SET fiyat = ?, stok = ?, skt = ?, hizli_kasa_kisayol = ? WHERE barkod = ?", 
+                                      (new_price, new_stock, new_skt_str, 1 if new_is_shortcut else 0, selected_barcode))
                             conn.commit()
                             conn.close()
-                            st.toast("Ürün veritabanından tamamen silindi!", icon="🗑️")
+                            st.toast("Ürün fiyatı, stoğu, SKT ve kısayol bilgisi başarıyla güncellendi!", icon="✅")
                             st.rerun()
+                            
+                    with col_actions[1]:
+                        # Safe delete block
+                        st.markdown("<p style='font-size:0.85em; color:#ef4444; font-weight:bold; margin-bottom:2px;'>⚠️ Silme Onayı</p>", unsafe_allow_html=True)
+                        confirm_delete = st.checkbox("Tamamen silmeyi onayla", key=f"del_confirm_{selected_barcode}")
+                        
+                        if st.button("🗑️ Ürünü Sil", type="secondary", use_container_width=True, key="stock_delete_submit_btn"):
+                            if not confirm_delete:
+                                st.warning("Lütfen silmeyi onaylayın.")
+                            else:
+                                conn = get_db_connection()
+                                c = conn.cursor()
+                                c.execute("DELETE FROM urunler WHERE barkod = ?", (selected_barcode,))
+                                c.execute("DELETE FROM hazir_urunler WHERE barkod = ?", (selected_barcode,))
+                                conn.commit()
+                                conn.close()
+                                st.toast("Ürün veritabanından tamamen silindi!", icon="🗑️")
+                                st.rerun()
+
+        render_stock_editor(df_products)
                             
         # Collapsible form to add brand new item
         st.markdown("---")
