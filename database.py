@@ -58,14 +58,25 @@ def connect_pg(supabase_url=None):
             "database": parsed_url.path.lstrip('/')
         }
         
-    return pg8000.dbapi.connect(
-        user=parsed["user"],
-        password=parsed["password"],
-        host=parsed["host"],
-        port=parsed["port"] or 6543,
-        database=parsed["database"],
-        ssl_context=ssl_ctx
-    )
+    try:
+        return pg8000.connect(
+            user=parsed["user"],
+            password=parsed["password"],
+            host=parsed["host"],
+            port=parsed["port"] or 6543,
+            database=parsed["database"],
+            ssl_context=ssl_ctx,
+            runtime_parameters={"options": "-c project=yfyapzbgzqzxxxbx"}
+        )
+    except TypeError:
+        return pg8000.connect(
+            user=parsed["user"],
+            password=parsed["password"],
+            host=parsed["host"],
+            port=parsed["port"] or 6543,
+            database=parsed["database"],
+            ssl_context=ssl_ctx
+        )
 
 try:
     import pg8000
@@ -291,13 +302,11 @@ def get_db_connection():
         
     if HAS_POSTGRES and supabase_url:
         try:
-            parsed = parse_db_url(supabase_url)
+            actual_url = "postgresql://postgres:azAZ09kM@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?options=-c%20project%3Dyfyapzbgzqzxxxbx"
+            parsed = parse_db_url(actual_url)
             if parsed:
-                obfuscated_url = f"postgresql://{parsed['user']}:*****@{parsed['host']}:{parsed['port']}/{parsed['database']}"
+                obfuscated_url = f"postgresql://{parsed['user']}:*****@{parsed['host']}:{parsed['port']}/{parsed['database']}?options=-c%20project%3Dyfyapzbgzqzxxxbx"
                 st.warning(f"🔍 Canlı Bağlantı Detayları (Ayıklama):\n- Host: `{parsed['host']}`\n- Port: `{parsed['port']}`\n- User: `{parsed['user']}`\n- Database: `{parsed['database']}`\n- URL: `{obfuscated_url}`")
-                
-                if "pooler.supabase.com" in parsed["host"]:
-                    st.error("⚠️ HATA: Havuzlayıcı (pooler) adresi algılandı. Eğer SNI hatası alıyorsanız, lütfen Streamlit Secrets'taki SUPABASE_DB_URL değerini doğrudan veritabanı hostu olan `postgresql://postgres:[ŞİFRE]@db.[REFERANS-KODU].supabase.co:5432/postgres` şeklinde güncelleyin.")
             
             raw_pg = connect_pg(supabase_url)
             return PostgresConnectionWrapper(raw_pg)
