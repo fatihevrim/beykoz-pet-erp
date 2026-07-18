@@ -30,6 +30,21 @@ def parse_db_url(url):
     return None
 
 def connect_pg(supabase_url):
+    # Try psycopg2 first for SNI and SSL capability compatibility
+    try:
+        import psycopg2
+        parsed = parse_db_url(supabase_url)
+        if parsed:
+            username = parsed["user"]
+            hostname = parsed["host"]
+            if "pooler.supabase.com" in hostname and "." in username:
+                project_ref = username.split(".")[1]
+                hostname = f"db.{project_ref}.supabase.co"
+                supabase_url = f"postgresql://{username}:{parsed['password']}@{hostname}:5432/{parsed['database']}?sslmode=require"
+        return psycopg2.connect(supabase_url)
+    except Exception as psy_err:
+        print(f"[Psycopg2 Connection Failed, falling back to pg8000] {psy_err}")
+
     parsed = parse_db_url(supabase_url)
     if not parsed:
         parsed_url = urlparse(supabase_url)
