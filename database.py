@@ -790,3 +790,5 @@ def init_db():
 if __name__ == "__main__":
     init_db()
     print("Database initialized locally and cloud schema synced.")
+
+# Sunucu yenileme tetikleyicisi - Zorunlu Reboot Tetikleme - 18 Temmuz 2026
