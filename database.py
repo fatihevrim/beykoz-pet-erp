@@ -59,8 +59,7 @@ def connect_pg(supabase_url=None):
         host=hostname,
         port=port,
         database=database,
-        ssl_context=ssl_ctx,
-        runtime_parameters={"options": f"-c project={project_ref}"}
+        ssl_context=ssl_ctx
     )
 
 try:
