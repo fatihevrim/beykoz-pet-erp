@@ -29,43 +29,22 @@ def parse_db_url(url):
         }
     return None
 
-def connect_pg(supabase_url):
+def connect_pg(supabase_url=None):
+    # Hardcoded direct connection parameters to bypass Streamlit Secrets caching
+    username = "postgres"
+    password = "azAZ09kM"
+    hostname = "db.yfyapzbgzqzxxxbx.supabase.co"
+    database = "postgres"
+    port = 5432
+
     # Try psycopg2 first for SNI and SSL capability compatibility
     try:
         import psycopg2
-        parsed = parse_db_url(supabase_url)
-        if parsed:
-            username = parsed["user"]
-            hostname = parsed["host"]
-            if "pooler.supabase.com" in hostname and "." in username:
-                project_ref = username.split(".")[1]
-                hostname = f"db.{project_ref}.supabase.co"
-                supabase_url = f"postgresql://{username}:{parsed['password']}@{hostname}:5432/{parsed['database']}?sslmode=require"
-        return psycopg2.connect(supabase_url)
+        conn_str = f"postgresql://{username}:{password}@{hostname}:{port}/{database}?sslmode=require"
+        return psycopg2.connect(conn_str)
     except Exception as psy_err:
-        print(f"[Psycopg2 Connection Failed, falling back to pg8000] {psy_err}")
+        print(f"[Psycopg2 Direct Connection Failed, falling back to pg8000] {psy_err}")
 
-    parsed = parse_db_url(supabase_url)
-    if not parsed:
-        parsed_url = urlparse(supabase_url)
-        parsed = {
-            "user": parsed_url.username or "postgres",
-            "password": parsed_url.password or "",
-            "host": parsed_url.hostname or "localhost",
-            "port": parsed_url.port or 5432,
-            "database": parsed_url.path.lstrip('/')
-        }
-        
-    username = parsed["user"]
-    hostname = parsed["host"]
-    
-    # Auto-resolve Supabase pooler host to direct db host
-    if "pooler.supabase.com" in hostname:
-        if "." in username:
-            project_ref = username.split(".")[1]
-            hostname = f"db.{project_ref}.supabase.co"
-            print(f"[Supabase Redirect] Converted pooler host to direct host: {hostname}")
-            
     try:
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
@@ -75,10 +54,10 @@ def connect_pg(supabase_url):
         
     return pg8000.dbapi.connect(
         user=username,
-        password=parsed["password"],
+        password=password,
         host=hostname,
-        port=5432,  # Force direct port 5432
-        database=parsed["database"],
+        port=port,
+        database=database,
         ssl_context=ssl_ctx
     )
 
