@@ -6,6 +6,21 @@ import pandas as pd
 from urllib.parse import urlparse
 import queue
 import threading
+import ssl
+
+def connect_pg(db_url):
+    try:
+        ssl_ctx = ssl.create_default_context()
+    except Exception:
+        ssl_ctx = True
+    return pg8000.dbapi.connect(
+        user=db_url.username,
+        password=db_url.password,
+        host=db_url.hostname,
+        port=5432,  # Force direct port 5432
+        database=db_url.path.lstrip('/'),
+        ssl_context=ssl_ctx
+    )
 
 try:
     import pg8000
@@ -200,13 +215,7 @@ def _supabase_sync_worker(supabase_url):
             query, params = task
             try:
                 db_url = urlparse(supabase_url)
-                raw_pg = pg8000.dbapi.connect(
-                    user=db_url.username,
-                    password=db_url.password,
-                    host=db_url.hostname,
-                    port=db_url.port or 5432,
-                    database=db_url.path.lstrip('/')
-                )
+                raw_pg = connect_pg(db_url)
                 conn = PostgresConnectionWrapper(raw_pg)
                 cursor = conn.cursor()
                 cursor.execute(query, params)
@@ -239,13 +248,7 @@ def get_db_connection():
     if HAS_POSTGRES and supabase_url:
         try:
             db_url = urlparse(supabase_url)
-            raw_pg = pg8000.dbapi.connect(
-                user=db_url.username,
-                password=db_url.password,
-                host=db_url.hostname,
-                port=db_url.port or 5432,
-                database=db_url.path.lstrip('/')
-            )
+            raw_pg = connect_pg(db_url)
             return PostgresConnectionWrapper(raw_pg)
         except Exception as e:
             st.error(f"⚠️ Supabase Bağlantı Hatası: {e}")
@@ -308,13 +311,7 @@ def sync_supabase_to_local(supabase_url, force=False):
     print(f"[Cold Sync] Synchronizing data from Supabase cloud (force={force})...")
     try:
         db_url = urlparse(supabase_url)
-        raw_pg = pg8000.dbapi.connect(
-            user=db_url.username,
-            password=db_url.password,
-            host=db_url.hostname,
-            port=db_url.port or 5432,
-            database=db_url.path.lstrip('/')
-        )
+        raw_pg = connect_pg(db_url)
         pg_conn = PostgresConnectionWrapper(raw_pg)
         pg_cursor = pg_conn.cursor()
         
@@ -379,13 +376,7 @@ def force_sync_at_startup(supabase_url):
     supabase_count = 0
     try:
         db_url = urlparse(supabase_url)
-        raw_pg = pg8000.dbapi.connect(
-            user=db_url.username,
-            password=db_url.password,
-            host=db_url.hostname,
-            port=db_url.port or 5432,
-            database=db_url.path.lstrip('/')
-        )
+        raw_pg = connect_pg(db_url)
         pg_conn = PostgresConnectionWrapper(raw_pg)
         pg_cursor = pg_conn.cursor()
         pg_cursor.execute("SELECT COUNT(*) FROM urunler")
@@ -426,13 +417,7 @@ def init_db():
     if HAS_POSTGRES and supabase_url:
         try:
             db_url = urlparse(supabase_url)
-            raw_pg = pg8000.dbapi.connect(
-                user=db_url.username,
-                password=db_url.password,
-                host=db_url.hostname,
-                port=db_url.port or 5432,
-                database=db_url.path.lstrip('/')
-            )
+            raw_pg = connect_pg(db_url)
             pg_conn = PostgresConnectionWrapper(raw_pg)
             pg_cursor = pg_conn.cursor()
         except Exception as e:
