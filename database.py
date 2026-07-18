@@ -9,16 +9,27 @@ import threading
 import ssl
 
 def connect_pg(db_url):
+    username = db_url.username or "postgres"
+    hostname = db_url.hostname or "localhost"
+    
+    # Auto-resolve Supabase pooler host to direct db host (to prevent SNI/PgBouncer errors)
+    if "pooler.supabase.com" in hostname:
+        if "." in username:
+            project_ref = username.split(".")[1]
+            hostname = f"db.{project_ref}.supabase.co"
+            print(f"[Supabase Redirect] Converted pooler host to direct host: {hostname}")
+            
     try:
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
     except Exception:
         ssl_ctx = True
+        
     return pg8000.dbapi.connect(
-        user=db_url.username,
+        user=username,
         password=db_url.password,
-        host=db_url.hostname,
+        host=hostname,
         port=5432,  # Force direct port 5432
         database=db_url.path.lstrip('/'),
         ssl_context=ssl_ctx
