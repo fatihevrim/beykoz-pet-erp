@@ -107,6 +107,10 @@ class PostgresConnectionWrapper:
         
     def commit(self):
         self.conn.commit()
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
         
     def rollback(self):
         self.conn.rollback()
@@ -232,16 +236,24 @@ def get_db_connection():
     except Exception:
         pass
         
-    # Open local SQLite connection
+    if HAS_POSTGRES and supabase_url:
+        try:
+            db_url = urlparse(supabase_url)
+            raw_pg = pg8000.dbapi.connect(
+                user=db_url.username,
+                password=db_url.password,
+                host=db_url.hostname,
+                port=db_url.port or 5432,
+                database=db_url.path.lstrip('/')
+            )
+            return PostgresConnectionWrapper(raw_pg)
+        except Exception as e:
+            print(f"[Direct Supabase Connection Error] {e}")
+            
+    # Fallback to local SQLite connection
     local_conn = sqlite3.connect(DB_PATH, timeout=30.0)
     local_conn.execute("PRAGMA journal_mode=WAL;")
     local_conn.row_factory = sqlite3.Row
-    
-    # Start sync daemon thread if Supabase is active
-    if HAS_POSTGRES and supabase_url:
-        start_sync_worker(supabase_url)
-        return HybridConnectionWrapper(local_conn, supabase_url)
-        
     return HybridConnectionWrapper(local_conn)
 
 @st.cache_data(ttl=30, show_spinner=False)
