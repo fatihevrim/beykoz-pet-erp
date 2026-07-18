@@ -248,6 +248,7 @@ def get_db_connection():
             )
             return PostgresConnectionWrapper(raw_pg)
         except Exception as e:
+            st.error(f"⚠️ Supabase Bağlantı Hatası: {e}")
             print(f"[Direct Supabase Connection Error] {e}")
             
     # Fallback to local SQLite connection
@@ -258,26 +259,29 @@ def get_db_connection():
 
 @st.cache_data(ttl=30, show_spinner=False)
 def read_sql_query(query, _conn, params=None):
-    # Reads run on the local SQLite connection for 0.1ms retrieval times
-    cursor = _conn.cursor()
-    if params:
-        cursor.execute(query, params)
-    else:
-        cursor.execute(query)
+    try:
+        cursor = _conn.cursor()
+        if params:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
+            
+        rows = cursor.fetchall()
+        if not cursor.description:
+            cursor.close()
+            return pd.DataFrame()
+            
+        columns = [desc[0] for desc in cursor.description]
         
-    rows = cursor.fetchall()
-    if not cursor.description:
+        data_list = []
+        for r in rows:
+            data_list.append({columns[i]: r[i] for i in range(len(columns))})
+            
         cursor.close()
-        return pd.DataFrame()
-        
-    columns = [desc[0] for desc in cursor.description]
-    
-    data_list = []
-    for r in rows:
-        data_list.append({columns[i]: r[i] for i in range(len(columns))})
-        
-    cursor.close()
-    return pd.DataFrame(data_list, columns=columns)
+        return pd.DataFrame(data_list, columns=columns)
+    except Exception as e:
+        st.error(f"❌ SQL Sorgu Hatası: {e} | Sorgu: `{query}`")
+        raise e
 
 # Cold pulls data from Supabase to local SQLite database
 def sync_supabase_to_local(supabase_url, force=False):
