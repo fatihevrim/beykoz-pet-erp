@@ -30,20 +30,21 @@ def parse_db_url(url):
     return None
 
 def connect_pg(supabase_url=None):
-    # Hardcoded direct connection parameters to bypass Streamlit Secrets caching
+    # Hardcoded pooler connection parameters with SNI option parameter
     username = "postgres"
     password = "azAZ09kM"
-    hostname = "db.yfyapzbgzqzxxxbx.supabase.co"
+    hostname = "aws-0-eu-central-1.pooler.supabase.com"
     database = "postgres"
-    port = 5432
+    port = 6543
+    project_ref = "yfyapzbgzqzxxxbx"
 
     # Try psycopg2 first for SNI and SSL capability compatibility
     try:
         import psycopg2
-        conn_str = f"postgresql://{username}:{password}@{hostname}:{port}/{database}?sslmode=require"
+        conn_str = f"postgresql://{username}:{password}@{hostname}:{port}/{database}?options=-c%20project%3D{project_ref}"
         return psycopg2.connect(conn_str)
     except Exception as psy_err:
-        print(f"[Psycopg2 Direct Connection Failed, falling back to pg8000] {psy_err}")
+        print(f"[Psycopg2 Pooler Connection Failed, falling back to pg8000] {psy_err}")
 
     try:
         ssl_ctx = ssl.create_default_context()
@@ -58,7 +59,8 @@ def connect_pg(supabase_url=None):
         host=hostname,
         port=port,
         database=database,
-        ssl_context=ssl_ctx
+        ssl_context=ssl_ctx,
+        runtime_parameters={"options": f"-c project={project_ref}"}
     )
 
 try:
