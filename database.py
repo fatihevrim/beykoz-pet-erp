@@ -345,14 +345,52 @@ def sync_supabase_to_local(supabase_url, force=False):
     finally:
         local_conn.close()
 
-@st.cache_resource(show_spinner=False)
 def force_sync_at_startup(supabase_url):
-    try:
-        sync_supabase_to_local(supabase_url, force=True)
-        return True
-    except Exception as e:
-        print(f"[force_sync_at_startup Error] {e}")
+    if not HAS_POSTGRES or not supabase_url:
         return False
+        
+    local_conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    local_cursor = local_conn.cursor()
+    local_count = 0
+    try:
+        local_cursor.execute("SELECT COUNT(*) FROM urunler")
+        local_count = local_cursor.fetchone()[0]
+    except Exception:
+        pass
+    local_conn.close()
+    
+    # Get Supabase count
+    supabase_count = 0
+    try:
+        db_url = urlparse(supabase_url)
+        raw_pg = pg8000.dbapi.connect(
+            user=db_url.username,
+            password=db_url.password,
+            host=db_url.hostname,
+            port=db_url.port or 5432,
+            database=db_url.path.lstrip('/')
+        )
+        pg_conn = PostgresConnectionWrapper(raw_pg)
+        pg_cursor = pg_conn.cursor()
+        pg_cursor.execute("SELECT COUNT(*) FROM urunler")
+        supabase_count = pg_cursor.fetchone()[0]
+        pg_cursor.close()
+        pg_conn.close()
+    except Exception as e:
+        print(f"[Sync Count Check Warning] Could not fetch Supabase count: {e}")
+        return False
+        
+    print(f"[Sync Count Check] Local: {local_count} | Supabase: {supabase_count}")
+    if local_count != supabase_count or local_count < 200:
+        print("[Sync Count Check] Discrepancy detected or local count too low. Triggering forced sync...")
+        try:
+            sync_supabase_to_local(supabase_url, force=True)
+            return True
+        except Exception as ex:
+            print(f"[Sync Count Check Error] Forced sync failed: {ex}")
+            return False
+            
+    return True
 
 def init_db():
     supabase_url = None

@@ -626,12 +626,12 @@ with st.sidebar:
         st.query_params.clear()
         st.rerun()
         
-    st.markdown("---")
     if st.button("🔄 Buluttan Verileri Çek", use_container_width=True):
-        from database import force_sync_at_startup
-        force_sync_at_startup.clear()
-        st.toast("🔄 Veritabanı buluttan senkronize ediliyor...", icon="🔄")
-        st.rerun()
+        from database import sync_supabase_to_local
+        if supabase_url:
+            sync_supabase_to_local(supabase_url, force=True)
+            st.toast("🔄 Veritabanı buluttan senkronize edildi!", icon="🔄")
+            st.rerun()
     
     st.markdown("---")
     # Quick low-stock / expiry summary widget in sidebar
