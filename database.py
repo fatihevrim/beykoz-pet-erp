@@ -11,6 +11,8 @@ import ssl
 def connect_pg(db_url):
     try:
         ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
     except Exception:
         ssl_ctx = True
     return pg8000.dbapi.connect(
