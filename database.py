@@ -8,11 +8,43 @@ import queue
 import threading
 import ssl
 
-def connect_pg(db_url):
-    username = db_url.username or "postgres"
-    hostname = db_url.hostname or "localhost"
+import re
+
+def parse_db_url(url):
+    pattern = r"^postgres(?:ql)?://([^:]+):(.*)@([^:/?]+)(?::(\d+))?/(.+)$"
+    match = re.match(pattern, url)
+    if match:
+        user = match.group(1)
+        password = match.group(2)
+        host = match.group(3)
+        port = int(match.group(4)) if match.group(4) else 5432
+        db_path = match.group(5)
+        db_name = db_path.split("?")[0]
+        return {
+            "user": user,
+            "password": password,
+            "host": host,
+            "port": port,
+            "database": db_name
+        }
+    return None
+
+def connect_pg(supabase_url):
+    parsed = parse_db_url(supabase_url)
+    if not parsed:
+        parsed_url = urlparse(supabase_url)
+        parsed = {
+            "user": parsed_url.username or "postgres",
+            "password": parsed_url.password or "",
+            "host": parsed_url.hostname or "localhost",
+            "port": parsed_url.port or 5432,
+            "database": parsed_url.path.lstrip('/')
+        }
+        
+    username = parsed["user"]
+    hostname = parsed["host"]
     
-    # Auto-resolve Supabase pooler host to direct db host (to prevent SNI/PgBouncer errors)
+    # Auto-resolve Supabase pooler host to direct db host
     if "pooler.supabase.com" in hostname:
         if "." in username:
             project_ref = username.split(".")[1]
@@ -28,10 +60,10 @@ def connect_pg(db_url):
         
     return pg8000.dbapi.connect(
         user=username,
-        password=db_url.password,
+        password=parsed["password"],
         host=hostname,
         port=5432,  # Force direct port 5432
-        database=db_url.path.lstrip('/'),
+        database=parsed["database"],
         ssl_context=ssl_ctx
     )
 
@@ -227,8 +259,7 @@ def _supabase_sync_worker(supabase_url):
                 
             query, params = task
             try:
-                db_url = urlparse(supabase_url)
-                raw_pg = connect_pg(db_url)
+                raw_pg = connect_pg(supabase_url)
                 conn = PostgresConnectionWrapper(raw_pg)
                 cursor = conn.cursor()
                 cursor.execute(query, params)
@@ -260,8 +291,15 @@ def get_db_connection():
         
     if HAS_POSTGRES and supabase_url:
         try:
-            db_url = urlparse(supabase_url)
-            raw_pg = connect_pg(db_url)
+            parsed = parse_db_url(supabase_url)
+            if parsed:
+                obfuscated_url = f"postgresql://{parsed['user']}:*****@{parsed['host']}:{parsed['port']}/{parsed['database']}"
+                st.warning(f"🔍 Canlı Bağlantı Detayları (Ayıklama):\n- Host: `{parsed['host']}`\n- Port: `{parsed['port']}`\n- User: `{parsed['user']}`\n- Database: `{parsed['database']}`\n- URL: `{obfuscated_url}`")
+                
+                if "pooler.supabase.com" in parsed["host"]:
+                    st.error("⚠️ HATA: Havuzlayıcı (pooler) adresi algılandı. Eğer SNI hatası alıyorsanız, lütfen Streamlit Secrets'taki SUPABASE_DB_URL değerini doğrudan veritabanı hostu olan `postgresql://postgres:[ŞİFRE]@db.[REFERANS-KODU].supabase.co:5432/postgres` şeklinde güncelleyin.")
+            
+            raw_pg = connect_pg(supabase_url)
             return PostgresConnectionWrapper(raw_pg)
         except Exception as e:
             st.error(f"⚠️ Supabase Bağlantı Hatası: {e}")
@@ -323,8 +361,7 @@ def sync_supabase_to_local(supabase_url, force=False):
             
     print(f"[Cold Sync] Synchronizing data from Supabase cloud (force={force})...")
     try:
-        db_url = urlparse(supabase_url)
-        raw_pg = connect_pg(db_url)
+        raw_pg = connect_pg(supabase_url)
         pg_conn = PostgresConnectionWrapper(raw_pg)
         pg_cursor = pg_conn.cursor()
         
@@ -388,8 +425,7 @@ def force_sync_at_startup(supabase_url):
     # Get Supabase count
     supabase_count = 0
     try:
-        db_url = urlparse(supabase_url)
-        raw_pg = connect_pg(db_url)
+        raw_pg = connect_pg(supabase_url)
         pg_conn = PostgresConnectionWrapper(raw_pg)
         pg_cursor = pg_conn.cursor()
         pg_cursor.execute("SELECT COUNT(*) FROM urunler")
@@ -429,8 +465,7 @@ def init_db():
     pg_cursor = None
     if HAS_POSTGRES and supabase_url:
         try:
-            db_url = urlparse(supabase_url)
-            raw_pg = connect_pg(db_url)
+            raw_pg = connect_pg(supabase_url)
             pg_conn = PostgresConnectionWrapper(raw_pg)
             pg_cursor = pg_conn.cursor()
         except Exception as e:
