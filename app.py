@@ -483,6 +483,17 @@ st.markdown(RESPONSIVE_MOBILE_CSS, unsafe_allow_html=True)
 # Ensure Database is Initialized
 init_db()
 
+# Force synchronization on initial application start (once per server launch)
+supabase_url = None
+try:
+    if "SUPABASE_DB_URL" in st.secrets:
+        supabase_url = st.secrets["SUPABASE_DB_URL"]
+except Exception:
+    pass
+if supabase_url:
+    from database import force_sync_at_startup
+    force_sync_at_startup(supabase_url)
+
 # Initialize session states for Login
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -613,6 +624,13 @@ with st.sidebar:
         st.session_state.role = None
         st.session_state.username = None
         st.query_params.clear()
+        st.rerun()
+        
+    st.markdown("---")
+    if st.button("🔄 Buluttan Verileri Çek", use_container_width=True):
+        from database import force_sync_at_startup
+        force_sync_at_startup.clear()
+        st.toast("🔄 Veritabanı buluttan senkronize ediliyor...", icon="🔄")
         st.rerun()
     
     st.markdown("---")

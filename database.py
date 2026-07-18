@@ -267,29 +267,29 @@ def read_sql_query(query, _conn, params=None):
     cursor.close()
     return pd.DataFrame(data_list, columns=columns)
 
-# Cold pulls data from Supabase to local SQLite database if local DB is empty
-def sync_supabase_to_local(supabase_url):
+# Cold pulls data from Supabase to local SQLite database
+def sync_supabase_to_local(supabase_url, force=False):
     if not HAS_POSTGRES or not supabase_url:
         return
         
-    print("[Cold Sync] Checking if local SQLite database is empty...")
     local_conn = sqlite3.connect(DB_PATH, timeout=30.0)
     local_cursor = local_conn.cursor()
     
-    # Check if we have data locally
-    local_count = 0
-    try:
-        local_cursor.execute("SELECT COUNT(*) FROM urunler")
-        local_count = local_cursor.fetchone()[0]
-    except Exception:
-        pass
-        
-    if local_count > 0:
-        print("[Cold Sync] Local database already contains data. Skipping initial download.")
-        local_conn.close()
-        return
-        
-    print("[Cold Sync] Local database is empty. Synchronizing data from Supabase cloud...")
+    if not force:
+        # Check if we have data locally
+        local_count = 0
+        try:
+            local_cursor.execute("SELECT COUNT(*) FROM urunler")
+            local_count = local_cursor.fetchone()[0]
+        except Exception:
+            pass
+            
+        if local_count > 0:
+            print("[Cold Sync] Local database already contains data. Skipping initial download.")
+            local_conn.close()
+            return
+            
+    print(f"[Cold Sync] Synchronizing data from Supabase cloud (force={force})...")
     try:
         db_url = urlparse(supabase_url)
         raw_pg = pg8000.dbapi.connect(
@@ -314,17 +314,19 @@ def sync_supabase_to_local(supabase_url):
                 pg_cursor.execute(f"SELECT * FROM {table}")
                 rows = pg_cursor.fetchall()
                 if not rows:
+                    if force:
+                        local_cursor.execute(f"DELETE FROM {table}")
                     continue
                     
                 columns = list(rows[0].keys())
                 
-                # Delete existing local rows (if any)
+                # Delete existing local rows
                 local_cursor.execute(f"DELETE FROM {table}")
                 
-                # Insert Supabase rows to SQLite
+                # Insert Supabase rows to SQLite using INSERT OR REPLACE
                 placeholders = ", ".join(["?"] * len(columns))
                 col_names = ", ".join(columns)
-                insert_sql = f"INSERT INTO {table} ({col_names}) VALUES ({placeholders})"
+                insert_sql = f"INSERT OR REPLACE INTO {table} ({col_names}) VALUES ({placeholders})"
                 
                 for r in rows:
                     vals = tuple(r[c] for c in columns)
@@ -342,6 +344,15 @@ def sync_supabase_to_local(supabase_url):
         print(f"[Cold Sync Error] Data pull from Supabase failed: {e}")
     finally:
         local_conn.close()
+
+@st.cache_resource(show_spinner=False)
+def force_sync_at_startup(supabase_url):
+    try:
+        sync_supabase_to_local(supabase_url, force=True)
+        return True
+    except Exception as e:
+        print(f"[force_sync_at_startup Error] {e}")
+        return False
 
 def init_db():
     supabase_url = None
