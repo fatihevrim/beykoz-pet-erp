@@ -30,21 +30,15 @@ def parse_db_url(url):
     return None
 
 def connect_pg(supabase_url=None):
-    # Hardcoded pooler connection parameters with SNI option parameter
-    username = "postgres"
-    password = "azAZ09kM"
-    hostname = "aws-0-eu-central-1.pooler.supabase.com"
-    database = "postgres"
-    port = 6543
-    project_ref = "yfyapzbgzqzxxxbx"
+    # Hardcoded pooler connection string with project options parameter to bypass Secrets cache
+    db_url = "postgresql://postgres:azAZ09kM@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?options=-c%20project%3Dyfyapzbgzqzxxxbx"
 
     # Try psycopg2 first for SNI and SSL capability compatibility
     try:
         import psycopg2
-        conn_str = f"postgresql://{username}:{password}@{hostname}:{port}/{database}?options=-c%20project%3D{project_ref}"
-        return psycopg2.connect(conn_str)
+        return psycopg2.connect(db_url)
     except Exception as psy_err:
-        print(f"[Psycopg2 Pooler Connection Failed, falling back to pg8000] {psy_err}")
+        print(f"[Psycopg2 Pooler Direct Failed, falling back to pg8000] {psy_err}")
 
     try:
         ssl_ctx = ssl.create_default_context()
@@ -53,12 +47,23 @@ def connect_pg(supabase_url=None):
     except Exception:
         ssl_ctx = True
         
+    parsed = parse_db_url(db_url)
+    if not parsed:
+        parsed_url = urlparse(db_url)
+        parsed = {
+            "user": parsed_url.username or "postgres",
+            "password": parsed_url.password or "",
+            "host": parsed_url.hostname or "localhost",
+            "port": parsed_url.port or 5432,
+            "database": parsed_url.path.lstrip('/')
+        }
+        
     return pg8000.dbapi.connect(
-        user=username,
-        password=password,
-        host=hostname,
-        port=port,
-        database=database,
+        user=parsed["user"],
+        password=parsed["password"],
+        host=parsed["host"],
+        port=parsed["port"] or 6543,
+        database=parsed["database"],
         ssl_context=ssl_ctx
     )
 
