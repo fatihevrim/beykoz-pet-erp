@@ -30,16 +30,22 @@ def parse_db_url(url):
     return None
 
 def connect_pg(supabase_url=None):
-    # Hardcoded pooler connection string with project options parameter to bypass Secrets cache
-    db_url = "postgresql://postgres:azAZ09kM@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?options=-c%20project%3Dyfyapzbgzqzxxxbx"
+    # Hardcoded direct connection parameters to bypass pooler completely
+    username = "postgres"
+    password = "azAZ09kM"
+    hostname = "db.yfyapzbgzqzxxxbx.supabase.co"
+    database = "postgres"
+    port = 5432
 
-    # Try psycopg2 first for SNI and SSL capability compatibility
+    # Try psycopg2 first for direct PostgreSQL connection
     try:
         import psycopg2
-        return psycopg2.connect(db_url)
+        conn_str = f"postgresql://{username}:{password}@{hostname}:{port}/{database}?sslmode=require&connect_timeout=10"
+        return psycopg2.connect(conn_str)
     except Exception as psy_err:
-        print(f"[Psycopg2 Pooler Direct Failed, falling back to pg8000] {psy_err}")
+        print(f"[Psycopg2 Direct Connection Failed, falling back to pg8000] {psy_err}")
 
+    # Fallback to pg8000
     try:
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
@@ -47,36 +53,15 @@ def connect_pg(supabase_url=None):
     except Exception:
         ssl_ctx = True
         
-    parsed = parse_db_url(db_url)
-    if not parsed:
-        parsed_url = urlparse(db_url)
-        parsed = {
-            "user": parsed_url.username or "postgres",
-            "password": parsed_url.password or "",
-            "host": parsed_url.hostname or "localhost",
-            "port": parsed_url.port or 5432,
-            "database": parsed_url.path.lstrip('/')
-        }
-        
-    try:
-        return pg8000.connect(
-            user=parsed["user"],
-            password=parsed["password"],
-            host=parsed["host"],
-            port=parsed["port"] or 6543,
-            database=parsed["database"],
-            ssl_context=ssl_ctx,
-            runtime_parameters={"options": "-c project=yfyapzbgzqzxxxbx"}
-        )
-    except TypeError:
-        return pg8000.connect(
-            user=parsed["user"],
-            password=parsed["password"],
-            host=parsed["host"],
-            port=parsed["port"] or 6543,
-            database=parsed["database"],
-            ssl_context=ssl_ctx
-        )
+    return pg8000.connect(
+        user=username,
+        password=password,
+        host=hostname,
+        port=port,
+        database=database,
+        ssl_context=ssl_ctx,
+        timeout=10
+    )
 
 try:
     import pg8000
@@ -302,10 +287,10 @@ def get_db_connection():
         
     if HAS_POSTGRES and supabase_url:
         try:
-            actual_url = "postgresql://postgres:azAZ09kM@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?options=-c%20project%3Dyfyapzbgzqzxxxbx"
+            actual_url = "postgresql://postgres:azAZ09kM@db.yfyapzbgzqzxxxbx.supabase.co:5432/postgres?sslmode=require"
             parsed = parse_db_url(actual_url)
             if parsed:
-                obfuscated_url = f"postgresql://{parsed['user']}:*****@{parsed['host']}:{parsed['port']}/{parsed['database']}?options=-c%20project%3Dyfyapzbgzqzxxxbx"
+                obfuscated_url = f"postgresql://{parsed['user']}:*****@{parsed['host']}:{parsed['port']}/{parsed['database']}?sslmode=require"
                 st.warning(f"🔍 Canlı Bağlantı Detayları (Ayıklama):\n- Host: `{parsed['host']}`\n- Port: `{parsed['port']}`\n- User: `{parsed['user']}`\n- Database: `{parsed['database']}`\n- URL: `{obfuscated_url}`")
             
             raw_pg = connect_pg(supabase_url)
