@@ -1651,6 +1651,119 @@ elif menu == "📦 Stok ve Ürünler":
                                 st.rerun()
                             conn.close()
 
+                with st.expander("📋 Toplu Barkod & Ürün Yükle (Seri Ürün Girişi)", expanded=False):
+                    st.markdown("""
+                    **Kullanım Rehberi:**
+                    Aşağıdaki kutuya satır satır veya virgülle ayrılmış ürün listenizi yapıştırın. Sistem barkodları ve ürün adlarını otomatik olarak çözümleyip veri tabanına tek tıkla dökebilir.
+                    
+                    *Örnek Formatlar:*
+                    - `8692223334445 - Pro Plan Kedi Maması 1.5kg`
+                    - `8690123456789 , Royal Canin Sterilised 2kg , 450 , 10`
+                    - `8697778889990 \t Ever Clean Kedi Kumu 10L`
+                    - `8694445556667 Trixie Ödül Maması 50g`
+                    """)
+                    
+                    bulk_text = st.text_area(
+                        "Toplu Liste Yapıştırın (Her satıra bir ürün veya Barkod - Ürün Adı):",
+                        height=180,
+                        placeholder="8691234567890 - Pro Plan Somonlu Kedi Maması 1.5kg\n8690987654321, Royal Canin Kitten 2kg, 450, 15\n8697778889990 Ever Clean Kedi Kumu 10L",
+                        key="bulk_products_input"
+                    )
+                    
+                    col_b_opts = st.columns([1, 1])
+                    with col_b_opts[0]:
+                        bulk_default_cat = st.selectbox(
+                            "Varsayılan Kategori (Belirtilmeyenler için):",
+                            ["Otomatik Algıla", "Kedi Maması", "Köpek Maması", "Kum", "Aksesuar", "Ödül/Vitamin", "Oyuncak", "Diğer"],
+                            key="bulk_default_cat_input"
+                        )
+                    with col_b_opts[1]:
+                        bulk_default_price = st.number_input(
+                            "Varsayılan Satış Fiyatı (TL):",
+                            min_value=0.0,
+                            value=0.0,
+                            step=10.0,
+                            key="bulk_default_price_input"
+                        )
+
+                    if st.button("🚀 Toplu Ürünleri Envantere Yükle / Güncelle", type="primary", use_container_width=True, key="bulk_upload_submit_btn"):
+                        if not bulk_text.strip():
+                            st.error("Lütfen yüklenecek liste metnini girin!")
+                        else:
+                            lines = [l.strip() for l in bulk_text.splitlines() if l.strip()]
+                            added_count = 0
+                            updated_count = 0
+                            
+                            conn = get_db_connection()
+                            c = conn.cursor()
+                            
+                            from scraper import clean_scraped_title, deduce_category_from_title
+                            
+                            for line_str in lines:
+                                parts = re.split(r'[,;\t|]+|\s+-\s+', line_str)
+                                parts = [p.strip() for p in parts if p.strip()]
+                                
+                                barcode = None
+                                title = None
+                                price = bulk_default_price
+                                stock = 10
+                                
+                                if parts and re.match(r'^\d{8,14}$', parts[0]):
+                                    barcode = parts[0]
+                                    if len(parts) > 1:
+                                        title = parts[1]
+                                    if len(parts) > 2:
+                                        try:
+                                            price = float(parts[2].replace('TL', '').replace('₺', '').replace(',', '.').strip())
+                                        except Exception:
+                                            pass
+                                    if len(parts) > 3:
+                                        try:
+                                            stock = int(parts[3].strip())
+                                        except Exception:
+                                            pass
+                                else:
+                                    bc_match = re.search(r'\b\d{8,14}\b', line_str)
+                                    if bc_match:
+                                        barcode = bc_match.group(0)
+                                        title = line_str.replace(barcode, '').strip()
+                                        title = re.sub(r'^[\s\-\|:,]+', '', title).strip()
+                                    else:
+                                        clean_t = clean_scraped_title(line_str)
+                                        if len(clean_t) >= 3:
+                                            title = clean_t
+                                            barcode = "custom_" + re.sub(r'\W+', '_', title.lower())[:25]
+                                
+                                if barcode and title:
+                                    title = clean_scraped_title(title)
+                                    if bulk_default_cat == "Otomatik Algıla":
+                                        cat = deduce_category_from_title(title)
+                                    else:
+                                        cat = bulk_default_cat
+                                        
+                                    c.execute("SELECT barkod FROM urunler WHERE barkod = ?", (barcode,))
+                                    if c.fetchone():
+                                        c.execute("""
+                                            UPDATE urunler 
+                                            SET ad = ?, kategori = ?, fiyat = CASE WHEN ? > 0 THEN ? ELSE fiyat END
+                                            WHERE barkod = ?
+                                        """, (title, cat, price, price, barcode))
+                                        updated_count += 1
+                                    else:
+                                        c.execute("""
+                                            INSERT INTO urunler (barkod, ad, kategori, fiyat, stok, kritik_stok, skt, gorsel_url, hizli_kasa_kisayol)
+                                            VALUES (?, ?, ?, ?, ?, 5, '2026-12-31', 'https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500', 0)
+                                        """, (barcode, title, cat, price, stock))
+                                        added_count += 1
+                            
+                            conn.commit()
+                            conn.close()
+                            
+                            st.cache_data.clear()
+                            st.success(f"🎉 Toplu yükleme tamamlandı! {added_count} Yeni Ürün Eklendi, {updated_count} Ürün Güncellendi.")
+                            st.toast(f"✅ {added_count} yeni ürün envantere döküldü!", icon="🚀")
+                            st.rerun()
+
         render_stock_editor(df_products)
 
 # ----------------- MODULE: MUSTERI YONETIMI -----------------

@@ -150,6 +150,45 @@ def scrape_barcode_online(barcode):
 
     clean_barcode = str(barcode).strip()
 
+    # 0. Google Custom Search API (If API credentials provided in secrets or env)
+    try:
+        import streamlit as st
+        api_key = None
+        cx = None
+        try:
+            if "GOOGLE_SEARCH_API_KEY" in st.secrets:
+                api_key = st.secrets["GOOGLE_SEARCH_API_KEY"]
+            if "GOOGLE_SEARCH_ENGINE_ID" in st.secrets:
+                cx = st.secrets["GOOGLE_SEARCH_ENGINE_ID"]
+        except Exception:
+            pass
+            
+        if not api_key:
+            api_key = os.environ.get("GOOGLE_SEARCH_API_KEY")
+        if not cx:
+            cx = os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
+            
+        if api_key and cx:
+            url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx}&q={clean_barcode}+pet"
+            resp = requests.get(url, timeout=4)
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get("items", [])
+                if items:
+                    raw_title = items[0].get("title") or items[0].get("snippet")
+                    cleaned = clean_scraped_title(raw_title)
+                    if cleaned:
+                        cat = deduce_category_from_title(cleaned)
+                        print(f"[OK] İnternetten Çekildi (Google Custom Search API): {cleaned}")
+                        return {
+                            "ad": cleaned,
+                            "kategori": cat,
+                            "fiyat": round(random.uniform(95.0, 480.0), 2),
+                            "gorsel_url": "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=500"
+                        }
+    except Exception as e_gcs:
+        print(f"[Google Custom Search API Warning] {e_gcs}")
+
     # 1. Direct check in mock DB
     if clean_barcode in MOCK_BARCODES:
         prod = MOCK_BARCODES[clean_barcode]
