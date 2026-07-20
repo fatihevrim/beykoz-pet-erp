@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import re
 from datetime import datetime, timedelta
 import sqlite3
 import os
@@ -1362,7 +1363,61 @@ elif menu == "📦 Stok ve Ürünler":
     df_products = read_sql_query("SELECT * FROM urunler", conn)
     df_products["skt"] = df_products["skt"].fillna("")
     conn.close()
+
+    # Draft Pending Products Pool Expander (Fiyat veya stoğu 0 olan taslak ürünler)
+    df_drafts = df_products[(df_products["fiyat"] <= 0) | (df_products["stok"] <= 0)]
+    draft_count = len(df_drafts)
     
+    if draft_count > 0:
+        with st.expander(f"⏳ Fiyat / Stok Bekleyen Taslak Ürünler Havuzu ({draft_count} Ürün)", expanded=True):
+            st.info("💡 Toplu yükleme ile eklenen ve henüz fiyatı/stoğu 0 olan ürünler bu havuzda bekletilir. Fiyatını ve stoğunu yazıp 'Kaydet & Ana Stoka Aktar' butonuna basarak ürünü ana stoka aktarabilirsiniz.")
+            
+            for idx, d_row in df_drafts.iterrows():
+                d_bc = str(d_row["barkod"])
+                d_name = str(d_row["ad"])
+                d_cat = str(d_row["kategori"])
+                
+                c_d1, c_d2, c_d3, c_d4 = st.columns([4, 2, 2, 2])
+                with c_d1:
+                    st.markdown(f"📦 **{d_name}**\n`<small style='opacity:0.7;'>Barkod: {d_bc} | Kategori: {d_cat}</small>`", unsafe_allow_html=True)
+                with c_d2:
+                    new_price = st.number_input(
+                        "Satış Fiyatı (TL):",
+                        min_value=0.0,
+                        value=float(d_row["fiyat"]) if d_row["fiyat"] > 0 else 0.0,
+                        step=5.0,
+                        key=f"draft_price_{d_bc}_{idx}"
+                    )
+                with c_d3:
+                    new_stock = st.number_input(
+                        "Stok Adedi:",
+                        min_value=0,
+                        value=int(d_row["stok"]) if d_row["stok"] > 0 else 10,
+                        step=1,
+                        key=f"draft_stock_{d_bc}_{idx}"
+                    )
+                with c_d4:
+                    st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+                    if st.button("💾 Kaydet & Aktar", key=f"save_draft_btn_{d_bc}_{idx}", type="primary", use_container_width=True):
+                        if new_price <= 0:
+                            st.error("Lütfen 0'dan büyük bir satış fiyatı girin!")
+                        else:
+                            conn = get_db_connection()
+                            c = conn.cursor()
+                            c.execute("""
+                                UPDATE urunler 
+                                SET fiyat = ?, stok = ? 
+                                WHERE barkod = ?
+                            """, (new_price, new_stock, d_bc))
+                            conn.commit()
+                            conn.close()
+                            
+                            st.cache_data.clear()
+                            st.toast(f"✅ {d_name} ürünü Fiyat ({new_price} TL) ve Stok ({new_stock} Adet) ile ana stoka aktarıldı!", icon="🎉")
+                            st.rerun()
+                st.markdown("<hr style='margin:8px 0; border-color:rgba(255,255,255,0.05);'>", unsafe_allow_html=True)
+            st.markdown("<br/>", unsafe_allow_html=True)
+            
     with col_list:
         st.markdown("### 📋 Güncel Envanter Listesi")
         
