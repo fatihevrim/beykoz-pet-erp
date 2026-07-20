@@ -7,4 +7,5 @@ pillow>=10.0.0
 streamlit-autorefresh
 pg8000
 psycopg2-binary
+pywhatkit
 
