@@ -6,9 +6,19 @@ import pandas as pd
 from urllib.parse import urlparse
 import queue
 import threading
-import ssl
-
 import re
+
+try:
+    import pg8000
+    HAS_POSTGRES = True
+except ImportError:
+    pg8000 = None
+    HAS_POSTGRES = False
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 
 def parse_db_url(url):
     pattern = r"^postgres(?:ql)?://([^:]+):(.*)@([^:/?]+)(?::(\d+))?/(.+)$"
@@ -30,47 +40,70 @@ def parse_db_url(url):
     return None
 
 def connect_pg(supabase_url=None):
-    # Hardcoded pooler connection parameters
-    username = "postgres"
-    password = "azAZ09kM"
-    hostname = "aws-0-eu-central-1.pooler.supabase.com"
-    database = "postgres"
-    port = 6543
-    project_ref = "yfyapzbgzqzxxxbx"
-    
-    # Use the official Supabase username-based routing format
-    pooler_username = f"{username}.{project_ref}"
+    if not supabase_url:
+        try:
+            if "SUPABASE_DB_URL" in os.environ:
+                supabase_url = os.environ.get("SUPABASE_DB_URL")
+            elif "SUPABASE_DB_URL" in st.secrets:
+                supabase_url = st.secrets["SUPABASE_DB_URL"]
+        except Exception:
+            pass
 
-    # Try psycopg2 first for pooler connection
-    try:
-        import psycopg2
-        return psycopg2.connect(
-            user=pooler_username,
+    if supabase_url:
+        parsed = parse_db_url(supabase_url)
+        if not parsed:
+            parsed_url = urlparse(supabase_url)
+            parsed = {
+                "user": parsed_url.username or "postgres",
+                "password": parsed_url.password or "",
+                "host": parsed_url.hostname or "localhost",
+                "port": parsed_url.port or 5432,
+                "database": parsed_url.path.lstrip('/')
+            }
+        username = parsed["user"]
+        password = parsed["password"]
+        hostname = parsed["host"]
+        port = parsed["port"]
+        database = parsed["database"]
+    else:
+        username = "postgres.yfyapzbgzqzxxxbx"
+        password = "azAZ09kM"
+        hostname = "aws-0-eu-central-1.pooler.supabase.com"
+        database = "postgres"
+        port = 6543
+
+    # Try psycopg2 first
+    if psycopg2:
+        try:
+            return psycopg2.connect(
+                user=username,
+                password=password,
+                host=hostname,
+                port=port,
+                database=database,
+                sslmode='require'
+            )
+        except Exception as psy_err:
+            print(f"[Psycopg2 Connection Failed, falling back to pg8000] {psy_err}")
+
+    # Fallback to pg8000
+    if pg8000:
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+        except Exception:
+            ssl_ctx = True
+            
+        return pg8000.connect(
+            user=username,
             password=password,
             host=hostname,
             port=port,
             database=database,
-            sslmode='require'
+            ssl_context=ssl_ctx
         )
-    except Exception as psy_err:
-        print(f"[Psycopg2 Pooler Username Connection Failed, falling back to pg8000] {psy_err}")
-
-    # Fallback to pg8000
-    try:
-        ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
-    except Exception:
-        ssl_ctx = True
-        
-    return pg8000.connect(
-        user=pooler_username,
-        password=password,
-        host=hostname,
-        port=port,
-        database=database,
-        ssl_context=ssl_ctx
-    )
+    raise Exception("No PostgreSQL driver available.")
 
 try:
     import pg8000
@@ -831,6 +864,33 @@ def init_db():
         except Exception as e_gen:
             print(f"[Local Seed Warning] {e_gen}")
             
+    if pg_cursor:
+        try:
+            local_cursor.execute("SELECT barkod, ad, kategori, fiyat, stok, kritik_stok, skt, gorsel_url, gelis_fiyati, hizli_kasa_kisayol FROM urunler")
+            all_products = local_cursor.fetchall()
+            for p in all_products:
+                try:
+                    pg_cursor.execute("""
+                        INSERT INTO urunler (barkod, ad, kategori, fiyat, stok, kritik_stok, skt, gorsel_url, gelis_fiyati, hizli_kasa_kisayol)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (barkod) DO UPDATE SET
+                        ad = EXCLUDED.ad,
+                        kategori = EXCLUDED.kategori,
+                        fiyat = EXCLUDED.fiyat,
+                        stok = EXCLUDED.stok,
+                        gorsel_url = COALESCE(urunler.gorsel_url, EXCLUDED.gorsel_url)
+                    """, p)
+                except Exception:
+                    pass
+            pg_conn.commit()
+            print(f"[Supabase Auto-Sync] Successfully synchronized {len(all_products)} products to Supabase.")
+        except Exception as e_upsert:
+            print(f"[Supabase Auto-Sync Warning] {e_upsert}")
+            try:
+                pg_conn.rollback()
+            except Exception:
+                pass
+
     local_conn.close()
     if pg_conn:
         pg_cursor.close()
