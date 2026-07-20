@@ -2053,29 +2053,43 @@ elif menu == "💇 Pet Kuaför":
     st.markdown("## 💇 Pet Kuaför Randevu Sistemi & WhatsApp Hatırlatma")
     
     # 1. Günü Gelen Randevular (WhatsApp Hatırlatmaları)
-    st.markdown("### 🔔 Günü Gelen Randevular & Bildirimler")
+    st.markdown("### 🔔 Bekleyen Randevular & Bildirimler")
     today_str = datetime.now().strftime("%Y-%m-%d")
+    
+    col_filter_top1, col_filter_top2 = st.columns([1, 1])
+    with col_filter_top1:
+        top_randevu_filter = st.radio("Randevu Görünüm Filtresi:", ["Tüm Bekleyen Randevular", "Sadece Bugünküler"], horizontal=True, key="top_randevu_filter_radio")
     
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
-        SELECT r.*, m.isim, m.telefon 
-        FROM randevular r 
-        JOIN musteriler m ON r.musteri_id = m.id 
-        WHERE r.tarih = ? AND r.durum = 'Bekliyor'
-        ORDER BY r.saat ASC
-    """, (today_str,))
+    
+    if top_randevu_filter == "Sadece Bugünküler":
+        c.execute("""
+            SELECT r.*, COALESCE(m.isim, 'Bilinmeyen Müşteri') AS isim, COALESCE(m.telefon, '-') AS telefon 
+            FROM randevular r 
+            LEFT JOIN musteriler m ON r.musteri_id = m.id 
+            WHERE r.tarih = ? AND r.durum = 'Bekliyor'
+            ORDER BY r.saat ASC
+        """, (today_str,))
+    else:
+        c.execute("""
+            SELECT r.*, COALESCE(m.isim, 'Bilinmeyen Müşteri') AS isim, COALESCE(m.telefon, '-') AS telefon 
+            FROM randevular r 
+            LEFT JOIN musteriler m ON r.musteri_id = m.id 
+            WHERE r.durum = 'Bekliyor'
+            ORDER BY r.tarih ASC, r.saat ASC
+        """)
     today_appointments = c.fetchall()
     
     if not today_appointments:
-        st.info("Bugün için planlanmış bekleyen kuaför randevusu bulunmuyor.")
+        st.info("Planlanmış bekleyen kuaför randevusu bulunmuyor.")
     else:
         for app in today_appointments:
             col_info, col_action = st.columns([7, 3])
             with col_info:
-                st.markdown(f"🐕 **{app['hayvan_ad']}** ({app['isim']} - {app['telefon']}) | 🕒 Saat: `{app['saat']}` | İşlem: `{app['islem']}`")
+                st.markdown(f"🐕 **{app['hayvan_ad']}** ({app['isim']} - {app['telefon']}) | 📅 Tarih: `{app['tarih']}` | 🕒 Saat: `{app['saat']}` | İşlem: `{app['islem']}`")
             with col_action:
-                msg = f"Merhaba {app['isim']}, Bugün saat {app['saat']}'te sevimli dostumuz {app['hayvan_ad']}'nin Beykoz Pet kuaför randevusu bulunmaktadır. Bilginize sunarız."
+                msg = f"Merhaba {app['isim']}, {app['tarih']} tarihinde saat {app['saat']}'te sevimli dostumuz {app['hayvan_ad']}'nin Beykoz Pet kuaför randevusu bulunmaktadır. Bilginize sunarız."
                 if st.button("💬 WhatsApp Hatırlatması Gönder", key=f"wa_app_btn_{app['id']}", use_container_width=True):
                     success, info = send_whatsapp_reminder(app['telefon'], msg)
                     if success:
@@ -2089,9 +2103,9 @@ elif menu == "💇 Pet Kuaför":
     reminder_target_date_str = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
     
     c.execute("""
-        SELECT r.*, m.isim, m.telefon 
+        SELECT r.*, COALESCE(m.isim, 'Bilinmeyen Müşteri') AS isim, COALESCE(m.telefon, '-') AS telefon 
         FROM randevular r 
-        JOIN musteriler m ON r.musteri_id = m.id 
+        LEFT JOIN musteriler m ON r.musteri_id = m.id 
         WHERE r.durum = 'Tamamlandı' AND r.tamamlandi_tarih = ?
     """, (reminder_target_date_str,))
     due_care_reminders = c.fetchall()
@@ -2148,12 +2162,15 @@ elif menu == "💇 Pet Kuaför":
                         st.rerun()
                         
     with col_list:
-        st.markdown("### 📅 Randevu Takvimi / Listesi")
+        st.markdown("### 📅 Randevu Takvimi & Tüm Liste")
+        
+        list_filter_status = st.selectbox("Görünüm Filtresi:", ["Tüm Randevular (Tüm Zamanlar)", "Sadece Bekleyenler", "Sadece Bugünküler", "Sadece Tamamlananlar"], key="list_filter_status_select")
+        
         c.execute("""
-            SELECT r.*, m.isim, m.telefon 
+            SELECT r.*, COALESCE(m.isim, 'Bilinmeyen Müşteri') AS isim, COALESCE(m.telefon, '-') AS telefon 
             FROM randevular r 
-            JOIN musteriler m ON r.musteri_id = m.id 
-            ORDER BY r.tarih ASC, r.saat ASC
+            LEFT JOIN musteriler m ON r.musteri_id = m.id 
+            ORDER BY r.tarih DESC, r.saat ASC
         """)
         all_appointments = c.fetchall()
         
@@ -2173,29 +2190,41 @@ elif menu == "💇 Pet Kuaför":
                     "Durum": app["durum"]
                 })
             df_app = pd.DataFrame(app_data)
-            st.dataframe(df_app.drop(columns=["id"]), use_container_width=True)
             
-            # Action: Mark completed
-            st.markdown("#### ✅ Randevuyu Tamamla")
-            pending_apps = df_app[df_app["Durum"] == "Bekliyor"]
-            if pending_apps.empty:
-                st.info("Tamamlanacak bekleyen randevu yok.")
+            # Apply Filter
+            if list_filter_status == "Sadece Bekleyenler":
+                df_app = df_app[df_app["Durum"] == "Bekliyor"]
+            elif list_filter_status == "Sadece Bugünküler":
+                df_app = df_app[df_app["Tarih"] == today_str]
+            elif list_filter_status == "Sadece Tamamlananlar":
+                df_app = df_app[df_app["Durum"] == "Tamamlandı"]
+                
+            if df_app.empty:
+                st.info("Seçilen filtre kriterlerine uygun randevu bulunamadı.")
             else:
-                done_id = st.selectbox("Tamamlanan Randevu:", options=pending_apps["id"].tolist(), format_func=lambda x: f"{pending_apps[pending_apps['id'] == x]['Tarih'].values[0]} | {pending_apps[pending_apps['id'] == x]['Evcil Hayvan'].values[0]} ({pending_apps[pending_apps['id'] == x]['Müşteri'].values[0]})", key="done_app_select")
-                if st.button("✔️ İşlemi Tamamlandı Olarak İşaretle", use_container_width=True):
-                    c.execute("UPDATE randevular SET durum = 'Tamamlandı', tamamlandi_tarih = ? WHERE id = ?", (today_str, done_id))
+                st.dataframe(df_app.drop(columns=["id"]), use_container_width=True)
+                
+                # Action: Mark completed
+                st.markdown("#### ✅ Randevuyu Tamamla")
+                pending_apps = df_app[df_app["Durum"] == "Bekliyor"]
+                if pending_apps.empty:
+                    st.info("Tamamlanacak bekleyen randevu yok.")
+                else:
+                    done_id = st.selectbox("Tamamlanan Randevu:", options=pending_apps["id"].tolist(), format_func=lambda x: f"{pending_apps[pending_apps['id'] == x]['Tarih'].values[0]} | {pending_apps[pending_apps['id'] == x]['Evcil Hayvan'].values[0]} ({pending_apps[pending_apps['id'] == x]['Müşteri'].values[0]})", key="done_app_select")
+                    if st.button("✔️ İşlemi Tamamlandı Olarak İşaretle", use_container_width=True):
+                        c.execute("UPDATE randevular SET durum = 'Tamamlandı', tamamlandi_tarih = ? WHERE id = ?", (today_str, done_id))
+                        conn.commit()
+                        st.toast("Randevu tamamlandı olarak işaretlendi ve 20 günlük periyodik takip başladı!", icon="✅")
+                        st.rerun()
+                
+                # Delete appointment block
+                st.markdown("#### 🗑️ Randevu İptal/Silme")
+                del_id = st.selectbox("Silinecek Randevu:", options=df_app["id"].tolist(), format_func=lambda x: f"{df_app[df_app['id'] == x]['Tarih'].values[0]} | {df_app[df_app['id'] == x]['Evcil Hayvan'].values[0]} ({df_app[df_app['id'] == x]['Müşteri'].values[0]})")
+                if st.button("❌ Randevuyu Sil", use_container_width=True):
+                    c.execute("DELETE FROM randevular WHERE id = ?", (del_id,))
                     conn.commit()
-                    st.toast("Randevu tamamlandı olarak işaretlendi ve 20 günlük periyodik takip başladı!", icon="✅")
+                    st.toast("Randevu silindi.", icon="🗑️")
                     st.rerun()
-            
-            # Delete appointment block
-            st.markdown("#### 🗑️ Randevu İptal/Silme")
-            del_id = st.selectbox("Silinecek Randevu:", options=df_app["id"].tolist(), format_func=lambda x: f"{df_app[df_app['id'] == x]['Tarih'].values[0]} | {df_app[df_app['id'] == x]['Evcil Hayvan'].values[0]} ({df_app[df_app['id'] == x]['Müşteri'].values[0]})")
-            if st.button("❌ Randevuyu Sil", use_container_width=True):
-                c.execute("DELETE FROM randevular WHERE id = ?", (del_id,))
-                conn.commit()
-                st.toast("Randevu silindi.", icon="🗑️")
-                st.rerun()
                 
     conn.close()
 
@@ -2210,9 +2239,9 @@ elif menu == "💉 Aşı Takvimi":
     conn = get_db_connection()
     c = conn.cursor()
     c.execute("""
-        SELECT a.*, m.isim, m.telefon 
+        SELECT a.*, COALESCE(m.isim, 'Bilinmeyen Müşteri') AS isim, COALESCE(m.telefon, '-') AS telefon 
         FROM asilar a 
-        JOIN musteriler m ON a.musteri_id = m.id 
+        LEFT JOIN musteriler m ON a.musteri_id = m.id 
         WHERE a.gelecek_doz_tarih = ?
     """, (today_str,))
     today_vaccinations = c.fetchall()
