@@ -40,7 +40,7 @@ def get_local_ip():
     except Exception:
         return "192.168.1.9"
 
-from database import init_db, get_db_connection, read_sql_query
+from database import init_db, get_db_connection, read_sql_query, get_supabase_url
 from scraper import scrape_barcode_online
 from ai_engine import clean_scraped_data_with_ai, get_smart_recommendations
 from qnb_billing import import_invoice_to_stock, MOCK_XML_INVOICE
@@ -484,13 +484,7 @@ st.markdown(RESPONSIVE_MOBILE_CSS, unsafe_allow_html=True)
 # Ensure Database is Initialized
 init_db()
 
-# Force synchronization bypassed because Direct Supabase mode is active
-supabase_url = None
-try:
-    if "SUPABASE_DB_URL" in st.secrets:
-        supabase_url = st.secrets["SUPABASE_DB_URL"]
-except Exception:
-    pass
+supabase_url = get_supabase_url()
 
 # Initialize session states for Login
 if "logged_in" not in st.session_state:

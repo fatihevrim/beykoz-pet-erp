@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import ssl
 from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
@@ -20,6 +21,23 @@ try:
 except ImportError:
     psycopg2 = None
 
+def get_supabase_url():
+    try:
+        if "SUPABASE_DB_URL" in os.environ and os.environ.get("SUPABASE_DB_URL"):
+            return os.environ.get("SUPABASE_DB_URL")
+        if "DATABASE_URL" in os.environ and os.environ.get("DATABASE_URL"):
+            return os.environ.get("DATABASE_URL")
+    except Exception:
+        pass
+    try:
+        if "SUPABASE_DB_URL" in st.secrets:
+            return st.secrets["SUPABASE_DB_URL"]
+        if "DATABASE_URL" in st.secrets:
+            return st.secrets["DATABASE_URL"]
+    except Exception:
+        pass
+    return None
+
 def parse_db_url(url):
     pattern = r"^postgres(?:ql)?://([^:]+):(.*)@([^:/?]+)(?::(\d+))?/(.+)$"
     match = re.match(pattern, url)
@@ -39,17 +57,33 @@ def parse_db_url(url):
         }
     return None
 
+def create_supabase_engine(supabase_url=None):
+    try:
+        from sqlalchemy import create_engine
+        if not supabase_url:
+            supabase_url = get_supabase_url()
+        if not supabase_url:
+            supabase_url = "postgresql://postgres.yfyapzbgzqzxxbx:azAZ09kM@aws-0-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=require"
+        if "sslmode=" not in supabase_url:
+            supabase_url += ("&sslmode=require" if "?" in supabase_url else "?sslmode=require")
+        supabase_url = supabase_url.replace(":6543/", ":5432/")
+        return create_engine(supabase_url, connect_args={"sslmode": "require"})
+    except Exception as e:
+        print(f"[SQLAlchemy Engine Warning] {e}")
+        return None
+
 def connect_pg(supabase_url=None):
     if not supabase_url:
-        try:
-            if "SUPABASE_DB_URL" in os.environ:
-                supabase_url = os.environ.get("SUPABASE_DB_URL")
-            elif "SUPABASE_DB_URL" in st.secrets:
-                supabase_url = st.secrets["SUPABASE_DB_URL"]
-        except Exception:
-            pass
+        supabase_url = get_supabase_url()
 
     if supabase_url:
+        # Ensure sslmode=require parameter is present
+        if "sslmode=" not in supabase_url:
+            supabase_url += ("&sslmode=require" if "?" in supabase_url else "?sslmode=require")
+
+        # Port 5432 Direct Connection / Session Pooler fix
+        supabase_url = supabase_url.replace(":6543/", ":5432/")
+
         parsed = parse_db_url(supabase_url)
         if not parsed:
             parsed_url = urlparse(supabase_url)
@@ -58,19 +92,26 @@ def connect_pg(supabase_url=None):
                 "password": parsed_url.password or "",
                 "host": parsed_url.hostname or "localhost",
                 "port": parsed_url.port or 5432,
-                "database": parsed_url.path.lstrip('/')
+                "database": (parsed_url.path.lstrip('/') or "postgres").split('?')[0]
             }
         username = parsed["user"]
         password = parsed["password"]
         hostname = parsed["host"]
         port = parsed["port"]
         database = parsed["database"]
+
+        if port == 6543:
+            port = 5432
+
+        # Ensure full project ID tenant identifier on pooler connections
+        if "pooler.supabase.com" in hostname and "." not in username:
+            username = f"{username}.yfyapzbgzqzxxbx"
     else:
-        username = "postgres.yfyapzbgzqzxxxbx"
+        username = "postgres.yfyapzbgzqzxxbx"
         password = "azAZ09kM"
         hostname = "aws-0-eu-central-1.pooler.supabase.com"
         database = "postgres"
-        port = 6543
+        port = 5432  # 5432 Direct Connection / Session Pooler
 
     # Try psycopg2 first
     if psycopg2:
@@ -81,7 +122,8 @@ def connect_pg(supabase_url=None):
                 host=hostname,
                 port=port,
                 database=database,
-                sslmode='require'
+                sslmode='require',
+                connect_timeout=10
             )
         except Exception as psy_err:
             print(f"[Psycopg2 Connection Failed, falling back to pg8000] {psy_err}")
@@ -320,19 +362,17 @@ def start_sync_worker(supabase_url):
 
 # Main function to retrieve local connection wrapped in Hybrid sync layer
 def get_db_connection():
-    supabase_url = None
-    try:
-        if "SUPABASE_DB_URL" in st.secrets:
-            supabase_url = st.secrets["SUPABASE_DB_URL"]
-    except Exception:
-        pass
+    supabase_url = get_supabase_url()
         
     if HAS_POSTGRES and supabase_url:
         try:
-            actual_url = "postgresql://postgres.yfyapzbgzqzxxxbx:azAZ09kM@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
-            parsed = parse_db_url(actual_url)
+            target_url = supabase_url
+            if "sslmode=" not in target_url:
+                target_url += ("&sslmode=require" if "?" in target_url else "?sslmode=require")
+            target_url = target_url.replace(":6543/", ":5432/")
+            parsed = parse_db_url(target_url)
             if parsed:
-                obfuscated_url = f"postgresql://{parsed['user']}:*****@{parsed['host']}:{parsed['port']}/{parsed['database']}"
+                obfuscated_url = f"postgresql://{parsed['user']}:*****@{parsed['host']}:{parsed['port']}/{parsed['database']}?sslmode=require"
                 st.warning(f"🔍 Canlı Bağlantı Detayları (Ayıklama):\n- Host: `{parsed['host']}`\n- Port: `{parsed['port']}`\n- User: `{parsed['user']}`\n- Database: `{parsed['database']}`\n- URL: `{obfuscated_url}`")
             
             raw_pg = connect_pg(supabase_url)
@@ -485,12 +525,7 @@ def force_sync_at_startup(supabase_url):
     return True
 
 def init_db():
-    supabase_url = None
-    try:
-        if "SUPABASE_DB_URL" in st.secrets:
-            supabase_url = st.secrets["SUPABASE_DB_URL"]
-    except Exception:
-        pass
+    supabase_url = get_supabase_url()
 
     # 1. Initialize local SQLite connection
     local_conn = sqlite3.connect(DB_PATH, timeout=30.0)
