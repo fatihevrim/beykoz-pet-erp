@@ -21,6 +21,7 @@ try:
 except Exception:
     psycopg2 = None
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_supabase_url():
     try:
         if "SUPABASE_DB_URL" in os.environ and os.environ.get("SUPABASE_DB_URL"):
@@ -38,6 +39,7 @@ def get_supabase_url():
         pass
     return None
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def parse_db_url(url):
     pattern = r"^postgres(?:ql)?://([^:]+):(.*)@([^:/?]+)(?::(\d+))?/(.+)$"
     match = re.match(pattern, url)
@@ -366,7 +368,7 @@ def get_db_connection():
     local_conn.row_factory = sqlite3.Row
     return HybridConnectionWrapper(local_conn)
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def read_sql_query(query, _conn, params=None):
     try:
         cursor = _conn.cursor()
@@ -389,8 +391,20 @@ def read_sql_query(query, _conn, params=None):
         cursor.close()
         return pd.DataFrame(data_list, columns=columns)
     except Exception as e:
-        print(f"[SQL Query Error] {e} | Query: {query}")
+        print(f"[SQL Query Error] {e} | Query: `{query}`")
         raise e
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_cached_products(_conn):
+    return read_sql_query("SELECT * FROM urunler ORDER BY ad ASC", _conn)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_cached_customers(_conn):
+    return read_sql_query("SELECT * FROM musteriler ORDER BY isim ASC", _conn)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_cached_appointments(_conn):
+    return read_sql_query("SELECT * FROM randevular ORDER BY tarih DESC", _conn)
 
 # Cold pulls data from Supabase to local SQLite database
 def sync_supabase_to_local(supabase_url, force=False):
@@ -503,6 +517,7 @@ def force_sync_at_startup(supabase_url):
             
     return True
 
+@st.cache_resource(show_spinner=False)
 def init_db():
     supabase_url = get_supabase_url()
 

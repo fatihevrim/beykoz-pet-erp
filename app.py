@@ -74,6 +74,7 @@ def send_whatsapp_reminder(phone, message):
         return False, f"pywhatkit hatası ({e}). Tarayıcıda manuel gönderim için WhatsApp Web açıldı."
 
 # Helper function to parse weight from product names (e.g. 2 kg, 400g)
+@st.cache_data(ttl=3600, show_spinner=False)
 def parse_weight_from_name(name):
     import re
     match_kg = re.search(r"(\d+(?:\.\d+)?)\s*(?:kg|kilogram|kilo)", name, re.IGNORECASE)
