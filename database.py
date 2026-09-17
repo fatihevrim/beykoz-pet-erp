@@ -12,13 +12,13 @@ import re
 try:
     import pg8000
     HAS_POSTGRES = True
-except ImportError:
+except Exception:
     pg8000 = None
     HAS_POSTGRES = False
 
 try:
     import psycopg2
-except ImportError:
+except Exception:
     psycopg2 = None
 
 def get_supabase_url():
