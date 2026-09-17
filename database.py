@@ -63,10 +63,9 @@ def create_supabase_engine(supabase_url=None):
         if not supabase_url:
             supabase_url = get_supabase_url()
         if not supabase_url:
-            supabase_url = "postgresql://postgres.yfyapzbgzqzxxbx:azAZ09kM@aws-0-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=require"
+            supabase_url = "postgresql://postgres:azAZ09kM@db.yfyapzbgzqzxxbx.supabase.co:5432/postgres?sslmode=require"
         if "sslmode=" not in supabase_url:
             supabase_url += ("&sslmode=require" if "?" in supabase_url else "?sslmode=require")
-        supabase_url = supabase_url.replace(":6543/", ":5432/")
         return create_engine(supabase_url, connect_args={"sslmode": "require"})
     except Exception as e:
         print(f"[SQLAlchemy Engine Warning] {e}")
@@ -81,16 +80,13 @@ def connect_pg(supabase_url=None):
         if "sslmode=" not in supabase_url:
             supabase_url += ("&sslmode=require" if "?" in supabase_url else "?sslmode=require")
 
-        # Port 5432 Direct Connection / Session Pooler fix
-        supabase_url = supabase_url.replace(":6543/", ":5432/")
-
         parsed = parse_db_url(supabase_url)
         if not parsed:
             parsed_url = urlparse(supabase_url)
             parsed = {
                 "user": parsed_url.username or "postgres",
                 "password": parsed_url.password or "",
-                "host": parsed_url.hostname or "localhost",
+                "host": parsed_url.hostname or "db.yfyapzbgzqzxxbx.supabase.co",
                 "port": parsed_url.port or 5432,
                 "database": (parsed_url.path.lstrip('/') or "postgres").split('?')[0]
             }
@@ -99,19 +95,12 @@ def connect_pg(supabase_url=None):
         hostname = parsed["host"]
         port = parsed["port"]
         database = parsed["database"]
-
-        if port == 6543:
-            port = 5432
-
-        # Ensure full project ID tenant identifier on pooler connections
-        if "pooler.supabase.com" in hostname and "." not in username:
-            username = f"{username}.yfyapzbgzqzxxbx"
     else:
-        username = "postgres.yfyapzbgzqzxxbx"
+        username = "postgres"
         password = "azAZ09kM"
-        hostname = "aws-0-eu-central-1.pooler.supabase.com"
+        hostname = "db.yfyapzbgzqzxxbx.supabase.co"
         database = "postgres"
-        port = 5432  # 5432 Direct Connection / Session Pooler
+        port = 5432
 
     # Try psycopg2 first
     if psycopg2:
@@ -364,21 +353,11 @@ def start_sync_worker(supabase_url):
 def get_db_connection():
     supabase_url = get_supabase_url()
         
-    if HAS_POSTGRES and supabase_url:
+    if HAS_POSTGRES:
         try:
-            target_url = supabase_url
-            if "sslmode=" not in target_url:
-                target_url += ("&sslmode=require" if "?" in target_url else "?sslmode=require")
-            target_url = target_url.replace(":6543/", ":5432/")
-            parsed = parse_db_url(target_url)
-            if parsed:
-                obfuscated_url = f"postgresql://{parsed['user']}:*****@{parsed['host']}:{parsed['port']}/{parsed['database']}?sslmode=require"
-                st.warning(f"🔍 Canlı Bağlantı Detayları (Ayıklama):\n- Host: `{parsed['host']}`\n- Port: `{parsed['port']}`\n- User: `{parsed['user']}`\n- Database: `{parsed['database']}`\n- URL: `{obfuscated_url}`")
-            
             raw_pg = connect_pg(supabase_url)
             return PostgresConnectionWrapper(raw_pg)
         except Exception as e:
-            st.error(f"⚠️ Supabase Bağlantı Hatası: {e}")
             print(f"[Direct Supabase Connection Error] {e}")
             
     # Fallback to local SQLite connection
@@ -410,7 +389,7 @@ def read_sql_query(query, _conn, params=None):
         cursor.close()
         return pd.DataFrame(data_list, columns=columns)
     except Exception as e:
-        st.error(f"❌ SQL Sorgu Hatası: {e} | Sorgu: `{query}`")
+        print(f"[SQL Query Error] {e} | Query: {query}")
         raise e
 
 # Cold pulls data from Supabase to local SQLite database
