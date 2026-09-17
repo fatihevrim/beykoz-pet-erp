@@ -95,43 +95,46 @@ st.set_page_config(
 
 # Initialize session states for Theme Mode
 if "current_theme" not in st.session_state:
-    st.session_state.current_theme = "dark"
-
-# Custom CSS Styles (Dark Cyber vs. Corporate Light)
+    st.session_state.current_t# Custom CSS Styles (Modern SaaS / ERP Panel)
 DARK_THEME_CSS = """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
     
     html, body, [class*="css"] {
-        font-family: 'Outfit', sans-serif;
+        font-family: 'Outfit', 'Inter', -apple-system, sans-serif !important;
     }
     
     /* Background and global text color overrides */
     .stApp {
-        background: radial-gradient(circle at 50% 50%, #0d1117 0%, #07090e 100%) !important;
-        color: #f0f3f8 !important;
+        background: radial-gradient(circle at 50% 20%, #0f172a 0%, #090d16 100%) !important;
+        color: #f8fafc !important;
     }
     
-    /* Sidebar premium neon styling */
+    /* Sidebar premium dark slate/navy styling */
     [data-testid="stSidebar"] {
-        background-color: #0b0e14 !important;
-        border-right: 1px solid rgba(0, 173, 181, 0.15);
+        background-color: #0f172a !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.3) !important;
+    }
+    
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] label, [data-testid="stSidebar"] h2 {
+        color: #f8fafc !important;
     }
     
     /* Global Card Designs with Shadow and Border Glows */
-    .metric-card {
-        background: linear-gradient(145deg, #131924 0%, #0d121c 100%);
-        border: 1px solid rgba(0, 173, 181, 0.15);
+    .metric-card, .erp-card {
+        background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 12px;
-        padding: 22px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+        padding: 20px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
         margin-bottom: 20px;
-        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+        transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
     }
-    .metric-card:hover {
-        transform: translateY(-4px);
-        border-color: rgba(0, 173, 181, 0.5);
-        box-shadow: 0 0 20px rgba(0, 173, 181, 0.25), 0 10px 30px rgba(0, 0, 0, 0.5);
+    .metric-card:hover, .erp-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(59, 130, 246, 0.4);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     }
     
     .metric-card h3 {
@@ -148,63 +151,89 @@ DARK_THEME_CSS = """
         margin: 0 !important;
     }
     
+    /* Receipt Ticket / Adisyon Card */
+    .ticket-card {
+        background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
+        border: 2px solid #10b981;
+        border-radius: 14px;
+        padding: 24px;
+        box-shadow: 0 10px 30px rgba(16, 185, 129, 0.15);
+        margin-bottom: 20px;
+    }
+    
     /* Special recommendation cards style */
     .rec-card {
-        background: linear-gradient(135deg, rgba(0, 173, 181, 0.1) 0%, rgba(245, 158, 11, 0.08) 100%);
-        border: 1px solid rgba(0, 173, 181, 0.25);
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(16, 185, 129, 0.08) 100%);
+        border: 1px solid rgba(59, 130, 246, 0.3);
         border-radius: 12px;
         padding: 16px;
         margin-bottom: 12px;
         box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
-        transition: border-color 0.2s ease;
+        transition: all 0.2s ease;
     }
     .rec-card:hover {
-        border-color: #00adb5;
+        border-color: #3b82f6;
+        transform: translateY(-2px);
     }
     
-    /* Button Custom styling overrides */
+    /* Button Custom styling overrides (Action Buttons) */
     div.stButton > button {
-        background: linear-gradient(135deg, #1f2937 0%, #111827 100%) !important;
-        color: #f3f4f6 !important;
-        border: 1px solid rgba(0, 173, 181, 0.3) !important;
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
         border-radius: 8px !important;
         padding: 10px 24px !important;
         font-weight: 600 !important;
         font-size: 1rem !important;
-        transition: all 0.3s ease !important;
+        transition: all 0.2s ease-in-out !important;
         width: 100% !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
-    }
-    
-    /* Primary Action Buttons */
-    div.stButton > button[type="secondary"] {
-        border-color: rgba(245, 158, 11, 0.4) !important;
-    }
-    div.stButton > button[type="secondary"]:hover {
-        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%) !important;
-        color: #ffffff !important;
-        border-color: #fbbf24 !important;
-        box-shadow: 0 0 15px rgba(245, 158, 11, 0.4) !important;
+        box-shadow: 0 4px 14px rgba(59, 130, 246, 0.3) !important;
     }
     
     div.stButton > button:hover {
-        background: linear-gradient(135deg, #00adb5 0%, #007a80 100%) !important;
-        color: #ffffff !important;
-        border-color: #00fff2 !important;
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
         transform: translateY(-2px) !important;
-        box-shadow: 0 0 20px rgba(0, 173, 181, 0.4) !important;
+        box-shadow: 0 6px 20px rgba(59, 130, 246, 0.45) !important;
+    }
+    
+    /* Primary / Green Action Buttons */
+    div.stButton > button[type="primary"], div.stFormSubmitButton > button {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3) !important;
+    }
+    div.stButton > button[type="primary"]:hover, div.stFormSubmitButton > button:hover {
+        background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+        box-shadow: 0 6px 20px rgba(16, 185, 129, 0.45) !important;
     }
     
     /* Input Elements custom theme */
     div[data-baseweb="input"], div[data-baseweb="select"], div[data-baseweb="textarea"] {
-        background-color: #111827 !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        background-color: #1e293b !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
         border-radius: 8px !important;
         color: #ffffff !important;
     }
     div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within {
-        border-color: #00adb5 !important;
-        box-shadow: 0 0 10px rgba(0, 173, 181, 0.2) !important;
+        border-color: #10b981 !important;
+        box-shadow: 0 0 12px rgba(16, 185, 129, 0.25) !important;
+    }
+    
+    /* Enlarge Barcode Scan Field */
+    input[placeholder*="8690123456789"], input[placeholder*="Barkod"] {
+        font-size: 1.15rem !important;
+        font-weight: 600 !important;
+        padding: 10px !important;
+        border: 2px solid #3b82f6 !important;
+    }
+
+    /* Giant total price display */
+    .total-price-tag {
+        color: #10b981 !important;
+        font-size: 2.3rem !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.5px !important;
     }
     
     /* Typography */
@@ -216,10 +245,10 @@ DARK_THEME_CSS = """
     
     /* Tables and Dataframes style overrides */
     [data-testid="stTable"], [data-testid="stDataFrame"] {
-        border: 1px solid rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 12px;
         overflow: hidden;
-        background: #0f131a;
+        background: #0f172a;
     }
     
     /* Badge styling */
@@ -255,46 +284,46 @@ DARK_THEME_CSS = """
 
 LIGHT_THEME_CSS = """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
     
     html, body, [class*="css"] {
-        font-family: 'Outfit', sans-serif;
+        font-family: 'Outfit', 'Inter', -apple-system, sans-serif !important;
     }
     
-    /* Background and global text color overrides to force absolute contrast */
+    /* Background and global text color overrides */
     .stApp {
-        background: radial-gradient(circle at 50% 50%, #f8fafc 0%, #e2e8f0 100%) !important;
-        color: #121620 !important;
+        background: radial-gradient(circle at 50% 20%, #f8fafc 0%, #f1f5f9 100%) !important;
+        color: #0f172a !important;
     }
     
-    /* Global text contrast overrides */
     .stApp p, .stApp span, .stApp div, .stApp label, .stApp li {
-        color: #121620 !important;
+        color: #0f172a !important;
     }
     
-    /* Sidebar premium corporate styling with dark text */
+    /* Sidebar premium corporate styling */
     [data-testid="stSidebar"] {
         background-color: #ffffff !important;
-        border-right: 1px solid rgba(0, 0, 0, 0.08);
+        border-right: 1px solid rgba(0, 0, 0, 0.08) !important;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.05) !important;
     }
     [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] label, [data-testid="stSidebar"] h2 {
-        color: #121620 !important;
+        color: #0f172a !important;
     }
     
-    /* Global Card Designs with Shadow and Border Glows */
-    .metric-card {
+    /* Global Card Designs */
+    .metric-card, .erp-card {
         background: linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
         border: 1px solid rgba(16, 185, 129, 0.25);
         border-radius: 12px;
-        padding: 22px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+        padding: 20px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
         margin-bottom: 20px;
-        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+        transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
     }
-    .metric-card:hover {
-        transform: translateY(-4px);
+    .metric-card:hover, .erp-card:hover {
+        transform: translateY(-2px);
         border-color: rgba(16, 185, 129, 0.6);
-        box-shadow: 0 0 20px rgba(16, 185, 129, 0.2), 0 10px 30px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 8px 24px rgba(16, 185, 129, 0.15);
     }
     
     .metric-card h3 {
@@ -305,67 +334,76 @@ LIGHT_THEME_CSS = """
         margin-bottom: 8px !important;
     }
     .metric-card h2, .metric-card span, .metric-card div {
-        color: #000000 !important;
+        color: #0f172a !important;
         font-size: 2.1rem !important;
         font-weight: 700 !important;
         margin: 0 !important;
     }
     
+    /* Ticket / Adisyon Card */
+    .ticket-card {
+        background: #ffffff;
+        border: 2px solid #10b981;
+        border-radius: 14px;
+        padding: 24px;
+        box-shadow: 0 10px 30px rgba(16, 185, 129, 0.12);
+        margin-bottom: 20px;
+    }
+    
     /* Special recommendation cards style */
     .rec-card {
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(249, 115, 22, 0.06) 100%);
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(59, 130, 246, 0.06) 100%);
         border: 1px solid rgba(16, 185, 129, 0.2);
         border-radius: 12px;
         padding: 16px;
         margin-bottom: 12px;
         box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
-        transition: border-color 0.2s ease;
+        transition: all 0.2s ease;
     }
     .rec-card:hover {
         border-color: #10b981;
+        transform: translateY(-2px);
     }
     
     /* Button Custom styling overrides */
     div.stButton > button {
-        background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%) !important;
-        color: #121620 !important;
-        border: 1px solid rgba(0, 0, 0, 0.12) !important;
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
         border-radius: 8px !important;
         padding: 10px 24px !important;
         font-weight: 600 !important;
         font-size: 1rem !important;
-        transition: all 0.3s ease !important;
+        transition: all 0.2s ease !important;
         width: 100% !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
-    }
-    
-    /* Primary Action Buttons */
-    div.stButton > button[type="secondary"] {
-        border-color: rgba(249, 115, 22, 0.4) !important;
-    }
-    div.stButton > button[type="secondary"]:hover {
-        background: linear-gradient(135deg, #f97316 0%, #ea580c 100%) !important;
-        color: #ffffff !important;
-        border-color: #fb923c !important;
-        box-shadow: 0 0 15px rgba(249, 115, 22, 0.3) !important;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25) !important;
     }
     
     div.stButton > button:hover {
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
-        color: #ffffff !important;
-        border-color: #34d399 !important;
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
         transform: translateY(-2px) !important;
-        box-shadow: 0 0 20px rgba(16, 185, 129, 0.3) !important;
+        box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35) !important;
     }
     
-    /* Input Elements custom theme with pure white background and dark text */
+    div.stButton > button[type="primary"], div.stFormSubmitButton > button {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25) !important;
+    }
+    div.stButton > button[type="primary"]:hover, div.stFormSubmitButton > button:hover {
+        background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+        box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35) !important;
+    }
+    
+    /* Input Elements custom theme */
     div[data-baseweb="input"], div[data-baseweb="select"], div[data-baseweb="textarea"] {
         background-color: #ffffff !important;
-        border: 1px solid rgba(0, 0, 0, 0.2) !important;
+        border: 1px solid rgba(0, 0, 0, 0.15) !important;
         border-radius: 8px !important;
     }
     div[data-baseweb="input"] input, div[data-baseweb="select"] select, div[data-baseweb="textarea"] textarea {
-        color: #000000 !important;
+        color: #0f172a !important;
         background-color: #ffffff !important;
     }
     div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within {
@@ -373,33 +411,36 @@ LIGHT_THEME_CSS = """
         box-shadow: 0 0 10px rgba(16, 185, 129, 0.15) !important;
     }
     
-    /* Auto-complete selection lists & dropdowns */
-    div[role="listbox"] {
-        background-color: #ffffff !important;
-        color: #000000 !important;
+    /* Enlarge Barcode Scan Field */
+    input[placeholder*="8690123456789"], input[placeholder*="Barkod"] {
+        font-size: 1.15rem !important;
+        font-weight: 600 !important;
+        padding: 10px !important;
+        border: 2px solid #3b82f6 !important;
     }
-    div[role="option"] {
-        color: #000000 !important;
-        background-color: #ffffff !important;
-    }
-    div[role="option"]:hover {
-        background-color: #f1f5f9 !important;
+
+    /* Giant total price display */
+    .total-price-tag {
+        color: #10b981 !important;
+        font-size: 2.3rem !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.5px !important;
     }
     
     /* Typography */
     h1, h2, h3, h4, h5, h6 {
         font-family: 'Outfit', sans-serif !important;
         font-weight: 700 !important;
-        color: #121620 !important;
+        color: #0f172a !important;
     }
     
-    /* Tables and Dataframes style overrides - Pure white background and dark text */
+    /* Tables and Dataframes style overrides */
     [data-testid="stTable"], [data-testid="stDataFrame"], [data-testid="stTable"] th, [data-testid="stDataFrame"] th {
         border: 1px solid rgba(0, 0, 0, 0.08) !important;
         background: #ffffff !important;
     }
     [data-testid="stTable"] td, [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] div, [data-testid="stDataFrame"] span {
-        color: #000000 !important;
+        color: #0f172a !important;
     }
     
     /* Badge styling */
@@ -431,7 +472,6 @@ LIGHT_THEME_CSS = """
         font-weight: bold;
     }
 </style>
-
 """
 
 # Inject Active Theme CSS
@@ -664,6 +704,21 @@ with st.sidebar:
     except Exception:
         if st.button("🔄 Canlı Senkronizasyon", key="sidebar_autorefresh_btn", use_container_width=True):
             st.rerun()
+
+# Top Navigation / Main App Header Bar
+st.markdown("""
+<div style='background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 16px 24px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 20px rgba(0,0,0,0.2);'>
+    <div>
+        <h2 style='margin: 0; color: #38bdf8; font-size: 1.5rem; font-weight: 700; display: inline-flex; align-items: center; gap: 8px;'>
+            🐾 Beykoz Pet ERP & POS <span style='font-size: 0.65em; color: #94a3b8; font-weight: 400;'>Akıllı Mağaza Portalı</span>
+        </h2>
+    </div>
+    <div style='display: flex; gap: 10px; align-items: center;'>
+        <span class='badge-ok' style='font-size: 0.85em; padding: 6px 12px; border-radius: 20px;'>🟢 Sistem Canlı</span>
+        <span style='background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 0.85em; font-weight: 600; padding: 6px 12px; border-radius: 20px;'>⚡ Direct Supabase Active</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ----------------- MODULE: HIZLI POS KASA -----------------
 if menu == "🛒 Hızlı POS Kasa":
@@ -1090,11 +1145,21 @@ if menu == "🛒 Hızlı POS Kasa":
             if iskonto_orani > 0.0:
                 discount_amount = total_sum * (iskonto_orani / 100.0)
                 net_total_sum = total_sum - discount_amount
-                st.markdown(f"🎁 **Müşteri İskontosu (%{iskonto_orani:.1f}):** `- {discount_amount:.2f} TL`")
-                st.markdown(f"## 💰 Ödenecek Net Tutar: <span style='color: #10b981;'>{net_total_sum:.2f} TL</span>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style='background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 18px; text-align: center; margin: 16px 0;'>
+                    <span style='color: #94a3b8; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;'>Müşteri İskontosu (%{iskonto_orani:.1f}): -{discount_amount:.2f} TL</span><br/>
+                    <span style='color: #94a3b8; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;'>Ödenecek Net Tutar</span><br/>
+                    <span class='total-price-tag'>{net_total_sum:.2f} TL</span>
+                </div>
+                """, unsafe_allow_html=True)
             else:
                 net_total_sum = total_sum
-                st.markdown(f"## 💰 Ödenecek Net Tutar: <span style='color: #8b5cf6;'>{net_total_sum:.2f} TL</span>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style='background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 18px; text-align: center; margin: 16px 0;'>
+                    <span style='color: #94a3b8; font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;'>Toplam Tutar</span><br/>
+                    <span class='total-price-tag'>{net_total_sum:.2f} TL</span>
+                </div>
+                """, unsafe_allow_html=True)
             
             # Payment Method Selection
             st.markdown("#### 💳 Ödeme Yöntemi")
